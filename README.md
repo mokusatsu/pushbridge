@@ -1,6 +1,7 @@
 # Pushbridge
 
 Pushbullet型の端末間共有サービスを、まずローカルのWeb/PWAとREST APIで実証し、同じブラウザー向け契約を保ったままCloudflareへ移行するための統合ワークスペースです。
+テスト用の変更。
 
 ## 現在の縦切り
 
