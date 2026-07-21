@@ -52,6 +52,7 @@ Global API Keyは使用せず、対象アカウントに限定したAPI Tokenを
 | Workers R2 Storage Write | R2バケット作成 |
 | Account Settings Read / Write | Turnstile設定 |
 | Turnstile Sites Read / Write | Turnstile widget |
+| Access: Apps and Policies Read / Write | Workerホスト全体の送信元IP制限 |
 | Queues Read / Write | `enable_queue = true`の場合のみ |
 
 トークンはシェルまたはCI Secretから渡します。
@@ -100,6 +101,19 @@ curl -fsS https://push.example.com/api/bootstrap/status
 ```
 
 workers.devだけを使う場合は、Cloudflare Dashboardに表示されるスクリプトURLを使用します。Turnstileの許可ドメインには、正確なworkers.devホスト名を`additional_app_hostnames`で追加してください。
+
+### 送信元IP制限
+
+Workerの環境変数ではStatic Assetsを保護できないため、Cloudflare Accessを使ってホスト全体を制限します。IPv4アドレス1個は`/32`で指定します。
+
+```hcl
+access_ip_allowlist = {
+  hostname = "pushbridge-dev.mokusatsu.workers.dev"
+  cidrs    = ["217.178.53.176/32"]
+}
+```
+
+この設定ではCloudflareが観測する接続元IPを継続的に評価します。許可IP以外からはPWA、Service Worker、APIのいずれにも到達できません。制限を無効にする場合は`access_ip_allowlist = null`を明示します。
 
 ## 主な変数
 

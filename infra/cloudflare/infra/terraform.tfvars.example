@@ -3,6 +3,13 @@ account_id   = "0123456789abcdef0123456789abcdef"
 project_name = "relaypush"
 environment  = "dev"
 
+# Protect the complete hostname (Worker API and Static Assets) with Cloudflare
+# Access. Use /32 for one IPv4 address. Set access_ip_allowlist = null to disable.
+access_ip_allowlist = {
+  hostname = "pushbridge-dev.mokusatsu.workers.dev"
+  cidrs    = ["217.178.53.176/32"]
+}
+
 # For a production custom domain:
 # custom_domain = {
 #   hostname = "push.example.com"

@@ -24,6 +24,14 @@ output "workers_dev_enabled" {
   value       = var.enable_workers_dev
 }
 
+output "access_ip_allowlist" {
+  description = "Cloudflare Access hostname and allowed source CIDRs, or null when disabled."
+  value = var.access_ip_allowlist == null ? null : {
+    hostname = var.access_ip_allowlist.hostname
+    cidrs    = sort(tolist(var.access_ip_allowlist.cidrs))
+  }
+}
+
 output "d1_database_id" {
   description = "D1 database UUID."
   value       = cloudflare_d1_database.app.id

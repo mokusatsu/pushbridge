@@ -84,6 +84,35 @@ variable "enable_preview_urls" {
   default     = false
 }
 
+variable "access_ip_allowlist" {
+  description = "Optional Cloudflare Access application that restricts the complete Worker hostname, including Static Assets, to source IP CIDRs. Set to null to disable."
+  type = object({
+    hostname = string
+    cidrs    = set(string)
+  })
+  default = {
+    hostname = "pushbridge-dev.mokusatsu.workers.dev"
+    cidrs    = ["217.178.53.176/32"]
+  }
+  nullable = true
+
+  validation {
+    condition = var.access_ip_allowlist == null || can(
+      regex("^[a-z0-9.-]+$", var.access_ip_allowlist.hostname)
+    )
+    error_message = "access_ip_allowlist.hostname must be a lowercase hostname without a URL scheme, port, or path."
+  }
+
+  validation {
+    condition = var.access_ip_allowlist == null || (
+      length(var.access_ip_allowlist.cidrs) > 0 && alltrue([
+        for cidr in var.access_ip_allowlist.cidrs : can(cidrhost(cidr, 0))
+      ])
+    )
+    error_message = "access_ip_allowlist.cidrs must contain at least one valid IPv4 or IPv6 CIDR."
+  }
+}
+
 variable "custom_domain" {
   description = "Optional Worker custom domain. Supply either zone_id or zone_name."
   type = object({
