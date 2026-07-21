@@ -34,7 +34,9 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - Terraform: `>= 1.7, < 2.0`
 - Cloudflare Provider: `~> 5.22.0`
 - Wrangler: Makefileではメジャー版`4`
-- Workers compatibility date: `2026-07-13`
+- Workers compatibility date: `2026-07-21`
+
+Durable Object migrations are one-shot Worker upload inputs. For a fresh environment, copy the commented `durable_object_migration` example into the first apply only, then remove it after the migration tag advances. Keeping an already-applied migration in configuration makes Cloudflare reject later Worker uploads because provider v5 does not retain the migration payload in state.
 
 Providerやcompatibility dateを更新するときは、Cloudflareの変更点を確認してから個別のPull Requestで進めてください。
 
@@ -59,6 +61,21 @@ export CLOUDFLARE_API_TOKEN='...'
 ```
 
 ## 最初のデプロイ
+
+リポジトリルートから、makeなしでも状態診断とローカル統合検証を実行できます。
+
+```bash
+npm run cloudflare:state:diagnose
+npm run check
+npm run cloudflare:local:smoke
+npm run cloudflare:remote:smoke
+```
+
+state診断はbackend type、bucket、key、workspace、resource/output名だけを表示し、state本文やsecret値は表示しません。`backend_reachable_state_object_missing`の場合は`terraform apply`へ進まず、Cloudflare実環境との照合とimport計画を先に行ってください。
+
+remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。テスト用Pushと2台目の端末は終了時に片付けますが、bootstrapした識別可能な`smoke_*`ユーザーと端末AはAPI仕様上残ります。
+
+remote stateが失われた環境の実測結果とimport対応表は、リポジトリルートの`docs/13_CLOUDFLARE_STATE_RECOVERY.md`に記録しています。
 
 ```bash
 cp infra/terraform.tfvars.example infra/terraform.tfvars

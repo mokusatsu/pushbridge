@@ -22,13 +22,21 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/web-pwa/package-lock.json
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
       - name: Install server
         run: |
           python -m venv .runtime/venv
           .runtime/venv/bin/pip install -e 'services/relaymock[dev]'
       - name: Install client
         run: cd apps/web-pwa && npm ci
-      - name: Contract and unit checks
-        run: make check
+      - name: Initialize Terraform providers without backend
+        run: terraform -chdir=infra/cloudflare/infra init -backend=false
+      - name: Contract, unit, PWA build, and Terraform checks
+        run: npm run check
       - name: Full-stack HTTP smoke test
         run: make smoke
+      - name: Local Cloudflare Worker and PWA smoke test
+        run: npm run cloudflare:local:smoke

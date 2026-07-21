@@ -33,7 +33,7 @@ variable "environment" {
 variable "compatibility_date" {
   description = "Cloudflare Workers compatibility date. Review runtime changes before advancing it."
   type        = string
-  default     = "2026-07-13"
+  default     = "2026-07-21"
 
   validation {
     condition     = can(regex("^20[0-9]{2}-[0-9]{2}-[0-9]{2}$", var.compatibility_date))
@@ -57,6 +57,19 @@ variable "enable_observability" {
   description = "Enable Workers observability."
   type        = bool
   default     = true
+}
+
+variable "durable_object_migration" {
+  description = "One-shot Durable Object migration payload. Set only for the apply that advances the migration tag, then return to null because provider v5 does not persist this write-only payload in state."
+  type = object({
+    old_tag            = optional(string)
+    new_tag            = string
+    new_classes        = optional(list(string))
+    new_sqlite_classes = optional(list(string))
+    deleted_classes    = optional(list(string))
+  })
+  default  = null
+  nullable = true
 }
 
 variable "enable_workers_dev" {

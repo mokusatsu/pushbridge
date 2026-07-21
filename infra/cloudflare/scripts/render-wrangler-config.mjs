@@ -9,16 +9,39 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const root = join(scriptDirectory, "..");
 const generatedDirectory = join(root, ".generated");
 const outputPath = join(generatedDirectory, "wrangler.migrations.jsonc");
+const terraformBin = process.env.TERRAFORM_BIN ?? "terraform";
 
-const terraform = spawnSync(
-  process.env.TERRAFORM_BIN ?? "terraform",
-  ["-chdir=infra", "output", "-json"],
-  {
+function runTerraform(args) {
+  return spawnSync(terraformBin, ["-chdir=infra", ...args], {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-  },
-);
+  });
+}
+
+const state = runTerraform(["state", "pull"]);
+const stateList = runTerraform(["state", "list"]);
+let stateDocument;
+try {
+  stateDocument = JSON.parse(state.stdout);
+} catch {
+  stateDocument = undefined;
+}
+if (state.status !== 0 || stateList.status !== 0 || !stateDocument?.lineage) {
+  const detail = `${state.stderr ?? ""}${stateList.stderr ?? ""}`;
+  if (!stateDocument?.lineage || /No state file was found/i.test(detail)) {
+    console.error([
+      "Terraform backend is reachable, but the selected backend key/workspace has no state.",
+      "Verify terraform init -reconfigure -backend-config=backend-r2.hcl and terraform workspace show.",
+      "Do not run terraform apply until existing Cloudflare resources have been reconciled or imported.",
+    ].join("\n"));
+  } else {
+    process.stderr.write(detail || "terraform state pull failed\n");
+  }
+  process.exit(state.status ?? 1);
+}
+
+const terraform = runTerraform(["output", "-json"]);
 
 if (terraform.status !== 0) {
   process.stderr.write(terraform.stderr || "terraform output failed\n");
@@ -36,7 +59,10 @@ try {
 function requiredOutput(name) {
   const value = outputs[name]?.value;
   if (value === undefined || value === null || value === "") {
-    throw new Error(`Terraform output ${name} is missing. Run terraform apply first.`);
+    throw new Error(
+      `Terraform output ${name} is missing from an existing state. `
+      + "The state may be stale, connected to the wrong backend/workspace, or predate outputs.tf; inspect a refresh-only plan before changing it.",
+    );
   }
   return value;
 }

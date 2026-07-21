@@ -11,6 +11,14 @@ environment  = "dev"
 # enable_workers_dev = false
 # additional_app_hostnames = ["push.example.com"]
 
+# Supply this only for the first apply that creates UserHub, then remove it.
+# Future Durable Object schema changes must use the current tag as old_tag and
+# a new tag as new_tag for one apply only.
+# durable_object_migration = {
+#   new_tag            = "v1"
+#   new_sqlite_classes = ["UserHub"]
+# }
+
 # When using only workers.dev, add the exact hostname once known:
 # additional_app_hostnames = [
 #   "relaypush-dev.<your-workers-subdomain>.workers.dev",

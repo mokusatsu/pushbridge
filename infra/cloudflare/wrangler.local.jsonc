@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pushbridge-local",
+  "main": "worker/index.mjs",
+  "compatibility_date": "2026-07-21",
+  "assets": {
+    "directory": "../../apps/web-pwa/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/health",
+      "/healthz",
+      "/api/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pushbridge-local-db",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "pushbridge-local-files"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_HUB",
+        "class_name": "UserHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "UserHub"
+      ]
+    }
+  ],
+  "vars": {
+    "APP_ENVIRONMENT": "local",
+    "APP_NAME": "pushbridge",
+    "R2_BUCKET_NAME": "pushbridge-local-files",
+    "FILE_RETENTION_POLICY": "{\"ttl/1d/\":172800,\"ttl/7d/\":691200,\"ttl/30d/\":2678400}"
+  }
+}

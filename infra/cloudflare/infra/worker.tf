@@ -18,19 +18,28 @@ resource "cloudflare_workers_script" "app" {
       headers            = file(local.assets_headers)
       html_handling      = "auto-trailing-slash"
       not_found_handling = "single-page-application"
-      run_worker_first   = ["/api/*", "/auth/*", "/ws/*"]
+      run_worker_first   = ["/api/*", "/auth/*", "/ws/*", "/health", "/healthz"]
     }
   }
 
   bindings = local.worker_bindings
 
-  migrations = {
-    new_tag            = "v1"
-    new_sqlite_classes = ["UserHub"]
-  }
+  migrations = var.durable_object_migration
 
   observability = {
-    enabled = var.enable_observability
+    enabled            = var.enable_observability
+    head_sampling_rate = 1
+    logs = {
+      enabled            = var.enable_observability
+      head_sampling_rate = 1
+      invocation_logs    = true
+      persist            = true
+    }
+    traces = {
+      enabled            = false
+      head_sampling_rate = 1
+      persist            = true
+    }
   }
 
   lifecycle {

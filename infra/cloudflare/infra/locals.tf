@@ -14,10 +14,10 @@ locals {
   custom_hostname = var.custom_domain == null ? null : var.custom_domain.hostname
   custom_origin   = local.custom_hostname == null ? null : "https://${local.custom_hostname}"
 
-  app_hostnames = distinct(compact(concat(
+  app_hostnames = sort(distinct(compact(concat(
     var.additional_app_hostnames,
     [local.custom_hostname]
-  )))
+  ))))
 
   r2_cors_origins = distinct(compact(concat(
     var.cors_allowed_origins,

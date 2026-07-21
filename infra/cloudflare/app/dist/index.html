@@ -1,29 +1,26 @@
 <!doctype html>
 <html lang="ja">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#111827" />
-    <meta name="description" content="RelayPush Cloudflare infrastructure bootstrap" />
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#3157d5" />
+    <meta name="application-name" content="Pushbridge" />
+    <meta
+      name="description"
+      content="端末間でノート、リンク、短期ファイルを送るローカルファーストPWA"
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <title>RelayPush Infrastructure</title>
-    <link rel="stylesheet" href="/app.css" />
+    <title>Pushbridge</title>
+    <script type="module" crossorigin src="/assets/index-D6EdX7XZ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DMyaQhFe.css">
   </head>
   <body>
-    <main>
-      <h1>RelayPush</h1>
-      <p>
-        Cloudflare IaCブートストラップが配信されています。この画面は静的アセット、
-        <code>/api/bootstrap/status</code> はWorkerと各バインディングの配備状態を確認します。
-      </p>
-      <div class="status">
-        <span id="dot" class="dot" aria-hidden="true"></span>
-        <strong id="summary">未確認</strong>
-        <button id="check" type="button">状態を確認</button>
-      </div>
-      <pre id="output" aria-live="polite">状態確認を実行してください。</pre>
-    </main>
-    <script type="module" src="/app.js"></script>
+    <noscript>このアプリケーションにはJavaScriptが必要です。</noscript>
+    <div id="root"></div>
   </body>
 </html>

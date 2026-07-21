@@ -226,13 +226,28 @@ async function createPush(request, env, auth, requestId) {
   if (!['note', 'link'].includes(body.type)) {
     return problem(422, "unsupported_push_type", "The Worker PoC currently accepts note and link pushes.", requestId);
   }
-  const clientGuid = body.client_guid ?? request.headers.get("idempotency-key") ?? id("job");
+  const idempotencyKey = request.headers.get("idempotency-key");
+  if (idempotencyKey && idempotencyKey.length > 200) {
+    return problem(422, "invalid_idempotency_key", "Idempotency-Key must be 200 characters or fewer.", requestId);
+  }
+  if (idempotencyKey && body.client_guid && idempotencyKey !== body.client_guid) {
+    return problem(422, "idempotency_key_mismatch", "Idempotency-Key and client_guid must match.", requestId);
+  }
+  const clientGuid = body.client_guid ?? idempotencyKey ?? id("job");
   const replay = await env.DB.prepare("SELECT * FROM pushes WHERE user_id = ? AND client_guid = ?").bind(auth.user_id, clientGuid).first();
-  if (replay) return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   const payload = body.payload ?? {};
   if (JSON.stringify(payload).length > 2_000_000) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
   const target = body.target ?? { kind: "all_other_devices" };
   if (!['all_other_devices', 'all_devices', 'device'].includes(target.kind)) return problem(422, "invalid_target", "Invalid target kind.", requestId);
+  if (target.kind === "device" && !target.device_id) return problem(422, "invalid_target", "device_id is required for a device target.", requestId);
+  if (replay) {
+    const sameRequest = replay.type === body.type
+      && replay.target_kind === target.kind
+      && (replay.target_device_id ?? null) === (target.device_id ?? null)
+      && JSON.stringify(JSON.parse(replay.payload_json ?? "{}")) === JSON.stringify(payload);
+    if (!sameRequest) return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
+    return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
+  }
   const now = Date.now();
   const expiresAt = now + Math.min(Number(body.expires_in) || 2_592_000, 2_592_000) * 1000;
   const pushId = id("psh");
@@ -323,6 +338,7 @@ export default {
     const requestId = getRequestId(request);
     try {
       if (request.method === "GET" && url.pathname === "/healthz") return json({ ok: true, service: env.APP_NAME, environment: env.APP_ENVIRONMENT, requestId });
+      if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok", service: env.APP_NAME ?? "pushbridge", environment: env.APP_ENVIRONMENT ?? "unknown", request_id: requestId });
       if (request.method === "GET" && url.pathname === "/api/bootstrap/status") return json({ ok: true, requestId, bootstrap: false, message: "Cloudflare application API is active.", bindings: { d1: Boolean(env.DB), r2: Boolean(env.FILES), durableObject: Boolean(env.USER_HUB), queue: Boolean(env.DELIVERY_QUEUE) }, policy: { fileRetention: retention(env) } });
 
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");

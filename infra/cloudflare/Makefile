@@ -51,8 +51,9 @@ db-migrations-list: render-wrangler
 
 worker-check:
 	@node --check worker/index.mjs
-	@node --check app/dist/service-worker.js
+	@node --check app/dist/sw.js
 	@node --check scripts/render-wrangler-config.mjs
+	@node --check scripts/diagnose-terraform-state.mjs
 
 check: fmt-check worker-check
 
