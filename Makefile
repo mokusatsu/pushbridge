@@ -23,7 +23,7 @@ check-client:
 	cd apps/web-pwa && npm run check
 
 smoke:
-	PYTHON_BIN=$(VENV_PYTHON) scripts/fullstack-smoke.sh
+	PYTHON_BIN=$(VENV_PYTHON) bash scripts/fullstack-smoke.sh
 
 sync-contract:
 	$(PYTHON) scripts/sync-contract.py
