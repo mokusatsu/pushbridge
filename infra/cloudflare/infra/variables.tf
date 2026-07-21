@@ -92,7 +92,10 @@ variable "access_ip_allowlist" {
   })
   default = {
     hostname = "pushbridge-dev.mokusatsu.workers.dev"
-    cidrs    = ["217.178.53.176/32"]
+    cidrs = [
+      "217.178.53.176/32",
+      "2409:11:bce0:600:b884:a1bc:2b95:bddd/128",
+    ]
   }
   nullable = true
 
