@@ -52,6 +52,7 @@ const child = spawn(npx, [...npxPrefix, "--yes", "wrangler@4", "dev", "--local",
   env: process.env,
   stdio: ["ignore", "pipe", "pipe"],
   shell: false,
+  detached: !windows,
   windowsHide: true,
 });
 let logs = "";
@@ -153,8 +154,12 @@ try {
   if (windows && child.pid) {
     spawnSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" });
   } else {
-    child.kill("SIGTERM");
+    if (child.pid && child.exitCode == null) {
+      try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+    }
     await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(3000)]);
-    if (child.exitCode == null) child.kill("SIGKILL");
+    if (child.pid && child.exitCode == null) {
+      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+    }
   }
 }

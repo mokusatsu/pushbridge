@@ -52,6 +52,7 @@ The first attempt to apply that routing-only update was rejected with Cloudflare
 - The remote smoke test passes device registration, Bearer enforcement, a two-device Note transfer, idempotent replay, conflict rejection, cursor delta sync, PWA assets, SPA fallback, and Service Worker delivery.
 - The deployed PWA was also exercised in a browser: bootstrap and same-origin API sync succeeded, a Note was sent, and the per-user IndexedDB view showed one cached Push. A separate local browser test verified that the same cached Note remains visible after the Worker is stopped and the PWA is reloaded offline.
 - The first Linux CI run revealed that the local Wrangler config still referenced the former `apps/web-pwa/dist` output. Windows had a stale local copy, while a clean runner did not. Local Wrangler now serves the same `infra/cloudflare/app/dist` artifact produced by Vite and used by Terraform.
+- Linux CI also required terminating the complete `npx`/Wrangler process group after the smoke test; killing only the `npx` parent left Wrangler holding the output pipes and prevented the job from completing. Windows continues to use `taskkill /t`.
 
 The R2 CORS/lifecycle resources carry a provider warning that later removal may require manual Cloudflare cleanup.
 
