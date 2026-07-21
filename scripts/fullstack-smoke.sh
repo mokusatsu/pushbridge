@@ -8,6 +8,10 @@ ORIGIN="http://${HOST}:${PORT}"
 RUNTIME_DIR="${PUSHBALL_RUNTIME_DIR:-${ROOT}/.runtime/smoke}"
 PYTHON_BIN="${PYTHON_BIN:-${ROOT}/.runtime/venv/bin/python}"
 
+if [[ "${PYTHON_BIN}" != /* ]]; then
+  PYTHON_BIN="${ROOT}/${PYTHON_BIN}"
+fi
+
 mkdir -p "${RUNTIME_DIR}"
 
 if [[ ! -x "${PYTHON_BIN}" ]]; then
