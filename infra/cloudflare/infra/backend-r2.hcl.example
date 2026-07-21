@@ -1,0 +1,16 @@
+# Pass this file with: terraform init -backend-config=backend-r2.hcl
+# Export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the dedicated R2 state token.
+bucket = "relaypush-terraform-state"
+key    = "relaypush/prod/terraform.tfstate"
+region = "auto"
+
+endpoints = {
+  s3 = "https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com"
+}
+
+skip_credentials_validation = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+skip_metadata_api_check     = true
+skip_s3_checksum            = true
+use_path_style              = true

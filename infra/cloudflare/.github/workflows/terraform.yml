@@ -1,0 +1,35 @@
+name: Terraform checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Terraform format
+        run: terraform -chdir=infra fmt -recursive -check -diff
+
+      - name: Terraform initialize without backend
+        run: terraform -chdir=infra init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=infra validate
+
+      - name: JavaScript syntax
+        run: make worker-check

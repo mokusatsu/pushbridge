@@ -1,0 +1,24 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc
+infra/terraform.tfvars
+infra/*.auto.tfvars
+!infra/terraform.tfvars.example
+
+# Generated local tooling
+.generated/
+.wrangler/
+.dev.vars*
+.env*
+
+# Node and editors
+node_modules/
+.DS_Store
+.idea/
+.vscode/

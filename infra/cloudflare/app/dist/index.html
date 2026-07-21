@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="description" content="RelayPush Cloudflare infrastructure bootstrap" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>RelayPush Infrastructure</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <main>
+      <h1>RelayPush</h1>
+      <p>
+        Cloudflare IaCブートストラップが配信されています。この画面は静的アセット、
+        <code>/api/bootstrap/status</code> はWorkerと各バインディングの配備状態を確認します。
+      </p>
+      <div class="status">
+        <span id="dot" class="dot" aria-hidden="true"></span>
+        <strong id="summary">未確認</strong>
+        <button id="check" type="button">状態を確認</button>
+      </div>
+      <pre id="output" aria-live="polite">状態確認を実行してください。</pre>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

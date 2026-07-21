@@ -1,0 +1,33 @@
+# Do not put CLOUDFLARE_API_TOKEN here. Export it as an environment variable.
+account_id   = "0123456789abcdef0123456789abcdef"
+project_name = "relaypush"
+environment  = "dev"
+
+# For a production custom domain:
+# custom_domain = {
+#   hostname = "push.example.com"
+#   zone_id  = "0123456789abcdef0123456789abcdef"
+# }
+# enable_workers_dev = false
+# additional_app_hostnames = ["push.example.com"]
+
+# When using only workers.dev, add the exact hostname once known:
+# additional_app_hostnames = [
+#   "relaypush-dev.<your-workers-subdomain>.workers.dev",
+#   "localhost"
+# ]
+
+# Queue delivery is intentionally off for the low-cost MVP.
+enable_queue = false
+
+# Extra application configuration. These are not secrets.
+worker_plain_text_vars = {
+  MAX_FILE_BYTES = "26214400"
+}
+
+# Store values only in an uncommitted tfvars file or inject through CI.
+# These values are written to Terraform state, which must be protected.
+worker_secrets = {
+  # SESSION_SIGNING_KEY = "replace-with-a-random-value"
+  # VAPID_PRIVATE_KEY   = "replace-with-the-private-key"
+}

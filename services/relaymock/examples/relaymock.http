@@ -1,0 +1,147 @@
+# VS Code REST Client / JetBrains HTTP Client 用
+@baseUrl = http://127.0.0.1:8000
+@token = paste-bootstrap-access-token-here
+@secondDeviceId = paste-linked-device-id-here
+@fileId = paste-file-id-here
+@uploadUrl = paste-entire-upload-url-here
+@downloadUrl = paste-entire-download-url-here
+
+### Health
+GET {{baseUrl}}/health
+
+### Capabilities used by Web/PWA clients
+GET {{baseUrl}}/v1/system/capabilities
+
+### Web Push public configuration
+GET {{baseUrl}}/v1/web-push-config
+
+### Bootstrap user and first device
+POST {{baseUrl}}/v1/auth/bootstrap
+Content-Type: application/json
+
+{
+  "handle": "alice",
+  "device_name": "Alice PWA",
+  "device_kind": "pwa"
+}
+
+### Current device
+GET {{baseUrl}}/v1/devices/me
+Authorization: Bearer {{token}}
+
+### Link second device
+POST {{baseUrl}}/v1/devices/link
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Alice Extension",
+  "kind": "browser_extension"
+}
+
+### Send note to second device
+POST {{baseUrl}}/v1/pushes
+Authorization: Bearer {{token}}
+Idempotency-Key: note-{{$timestamp}}
+Content-Type: application/json
+
+{
+  "target": {
+    "kind": "device",
+    "device_id": "{{secondDeviceId}}"
+  },
+  "type": "note",
+  "payload": {
+    "title": "RelayMock",
+    "body": "Hello from the REST client"
+  }
+}
+
+### Send current link to all other devices
+POST {{baseUrl}}/v1/pushes
+Authorization: Bearer {{token}}
+Idempotency-Key: link-{{$timestamp}}
+Content-Type: application/json
+
+{
+  "target": {
+    "kind": "all_other_devices"
+  },
+  "type": "link",
+  "payload": {
+    "title": "Example",
+    "url": "https://example.com"
+  }
+}
+
+### Initial sync
+GET {{baseUrl}}/v1/pushes?limit=100&include_deleted=true
+Authorization: Bearer {{token}}
+
+### Initialize file; replace size and optional SHA-256
+POST {{baseUrl}}/v1/files/init
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "filename": "cipher.bin",
+  "content_type": "application/octet-stream",
+  "size": 12,
+  "expires_in": 86400
+}
+
+### Upload exact raw bytes to the complete upload_url from init response
+PUT {{uploadUrl}}
+Content-Type: application/octet-stream
+
+hello world!
+
+### Complete upload
+POST {{baseUrl}}/v1/files/{{fileId}}/complete
+Authorization: Bearer {{token}}
+
+### Create encrypted-shape file Push
+POST {{baseUrl}}/v1/pushes
+Authorization: Bearer {{token}}
+Idempotency-Key: file-{{$timestamp}}
+Content-Type: application/json
+
+{
+  "target": {
+    "kind": "all_other_devices"
+  },
+  "type": "file",
+  "file_id": "{{fileId}}",
+  "ciphertext": "base64url-ciphertext-placeholder",
+  "nonce": "base64url-nonce-placeholder"
+}
+
+### Create download ticket
+POST {{baseUrl}}/v1/files/{{fileId}}/download-ticket
+Authorization: Bearer {{token}}
+
+### Download through complete download_url
+GET {{downloadUrl}}
+
+### Upsert current device Web Push subscription (201, then 200)
+POST {{baseUrl}}/v1/web-push-subscriptions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "endpoint": "https://push.example.test/subscription/1",
+  "p256dh": "mock-p256dh",
+  "auth": "mock-auth"
+}
+
+### Mock statistics (admin Router must be explicitly enabled)
+GET {{baseUrl}}/v1/mock/stats
+X-Mock-Admin: local-admin
+
+### Run TTL cleanup now
+POST {{baseUrl}}/v1/mock/cleanup
+X-Mock-Admin: local-admin
+
+### Reset all local data
+POST {{baseUrl}}/v1/mock/reset
+X-Mock-Admin: local-admin

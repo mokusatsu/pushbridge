@@ -1,0 +1,9 @@
+.runtime/
+.venv/
+node_modules/
+*.egg-info/
+data/
+*.db
+*.sqlite3
+*.log
+.DS_Store

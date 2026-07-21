@@ -1,0 +1,5 @@
+# Rename this file to backend.tf only after creating a separate R2 state bucket.
+# The bucket cannot be bootstrapped by the same Terraform state that uses it.
+terraform {
+  backend "s3" {}
+}

@@ -1,0 +1,43 @@
+{
+  "name": "pushbridge-pwa",
+  "private": true,
+  "version": "0.4.0",
+  "type": "module",
+  "description": "RelayMock-compatible local-first Web/PWA client for a Pushbullet-like REST API.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "serve:local": "node tools/local-gateway.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --pretty false",
+    "check": "npm run check:contract && npm run typecheck && npm run test && npm run build",
+    "smoke:api": "node tools/api-smoke.mjs",
+    "check:contract": "node tools/contract-check.mjs"
+  },
+  "dependencies": {
+    "idb": "^8.0.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/http-proxy": "^1.17.17",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "fake-indexeddb": "^6.2.4",
+    "http-proxy": "^1.18.1",
+    "jsdom": "^27.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

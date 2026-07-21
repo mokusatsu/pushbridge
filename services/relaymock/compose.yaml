@@ -1,0 +1,15 @@
+services:
+  relaymock:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      RELAYMOCK_DATABASE_PATH: /data/relaymock.db
+      RELAYMOCK_STORAGE_DIR: /data/objects
+      RELAYMOCK_ENABLE_MOCK_ADMIN: "true"
+      RELAYMOCK_ADMIN_TOKEN: local-admin
+    volumes:
+      - relaymock-data:/data
+
+volumes:
+  relaymock-data:

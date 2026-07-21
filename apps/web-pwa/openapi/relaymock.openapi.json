@@ -1,0 +1,3866 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RelayMock REST API",
+    "description": "Local mock for a Pushbullet-like device relay API. It deliberately uses development-only authentication and local storage.",
+    "version": "0.1.1"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8000",
+      "description": "Local Uvicorn"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/system/capabilities": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Describe mock features, limits, and supported transports",
+        "operationId": "get_capabilities_v1_system_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemCapabilitiesOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/web-push-config": {
+      "get": {
+        "tags": [
+          "system",
+          "web push mock"
+        ],
+        "summary": "Return Web Push subscription configuration",
+        "operationId": "get_web_push_config_v1_web_push_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebPushConfigOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/storage/usage": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Return authenticated storage usage and pressure",
+        "operationId": "get_storage_usage_v1_storage_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUsageOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/bootstrap": {
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Create a local mock account and its first device",
+        "description": "Development-only bootstrap endpoint.\n\nProduction should replace this with passkeys/OAuth and an approved device-link flow.",
+        "operationId": "bootstrap_v1_auth_bootstrap_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BootstrapIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Local account and first device created.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of the plaintext device token.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Pragma": {
+                "description": "Legacy cache prevention for the plaintext device token.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BootstrapOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List Devices",
+        "operationId": "list_devices_v1_devices_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Devices V1 Devices Get"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/me": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Get Current Device",
+        "operationId": "get_current_device_v1_devices_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/link": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Link Device",
+        "description": "Mock an already-approved device link and return a device-scoped token.",
+        "operationId": "link_device_v1_devices_link_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkDeviceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Device linked and device-scoped token issued.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of the plaintext device token.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              },
+              "Pragma": {
+                "description": "Legacy cache prevention for the plaintext device token.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkDeviceOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/devices/{device_id}": {
+      "patch": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Rename Device",
+        "operationId": "rename_device_v1_devices__device_id__patch",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Revoke Device",
+        "operationId": "revoke_device_v1_devices__device_id__delete",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pushes": {
+      "post": {
+        "tags": [
+          "pushes"
+        ],
+        "summary": "Create Push",
+        "operationId": "create_push_v1_pushes_post",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Push created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "200": {
+            "description": "Idempotent replay of an existing push.",
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "Always true when an existing push is returned for the same request.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "pushes"
+        ],
+        "summary": "List Pushes",
+        "operationId": "list_pushes_v1_pushes_get",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Include Deleted"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushListOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pushes/{push_id}": {
+      "get": {
+        "tags": [
+          "pushes"
+        ],
+        "summary": "Get Push",
+        "operationId": "get_push_v1_pushes__push_id__get",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "push_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Push Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "pushes"
+        ],
+        "summary": "Patch Push",
+        "operationId": "patch_push_v1_pushes__push_id__patch",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "push_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Push Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pushes"
+        ],
+        "summary": "Delete Push",
+        "operationId": "delete_push_v1_pushes__push_id__delete",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "push_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Push Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/files/init": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Init File",
+        "operationId": "init_file_v1_files_init_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileInitIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileInitOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "507": {
+            "$ref": "#/components/responses/InsufficientStorage"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/mock-storage/uploads/{ticket}": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload File Bytes",
+        "description": "Local stand-in for a short-lived presigned R2 PUT URL.",
+        "operationId": "upload_file_bytes_mock_storage_uploads__ticket__put",
+        "parameters": [
+          {
+            "name": "ticket",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticket"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "contentMediaType": "application/octet-stream",
+                "contentEncoding": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/files/{file_id}/complete": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Complete File",
+        "operationId": "complete_file_v1_files__file_id__complete_post",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/files/{file_id}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Get File Metadata",
+        "operationId": "get_file_metadata_v1_files__file_id__get",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Delete File",
+        "operationId": "delete_file_v1_files__file_id__delete",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/files/{file_id}/download-ticket": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Create Download Ticket",
+        "operationId": "create_download_ticket_v1_files__file_id__download_ticket_post",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadTicketOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mock-storage/downloads/{ticket}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download File Bytes",
+        "description": "Local stand-in for a short-lived presigned R2 GET URL.\n\nLike an object-store signed URL, it is reusable until its expiry.",
+        "operationId": "download_file_bytes_mock_storage_downloads__ticket__get",
+        "parameters": [
+          {
+            "name": "ticket",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticket"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary",
+                  "contentMediaType": "application/octet-stream",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/web-push-subscriptions": {
+      "get": {
+        "tags": [
+          "web push mock"
+        ],
+        "summary": "List Subscriptions",
+        "operationId": "list_subscriptions_v1_web_push_subscriptions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SubscriptionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Subscriptions V1 Web Push Subscriptions Get"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "web push mock"
+        ],
+        "summary": "Create Subscription",
+        "operationId": "create_subscription_v1_web_push_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Subscription created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "200": {
+            "description": "Existing device endpoint updated idempotently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/web-push-subscriptions/{subscription_id}": {
+      "delete": {
+        "tags": [
+          "web push mock"
+        ],
+        "summary": "Revoke Subscription",
+        "operationId": "revoke_subscription_v1_web_push_subscriptions__subscription_id__delete",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subscription Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mock/cleanup": {
+      "post": {
+        "tags": [
+          "local mock administration"
+        ],
+        "summary": "Run Cleanup",
+        "operationId": "run_cleanup_v1_mock_cleanup_post",
+        "parameters": [
+          {
+            "name": "X-Mock-Admin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Explicit local-development administration token."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "title": "Response Run Cleanup V1 Mock Cleanup Post"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mock/reset": {
+      "post": {
+        "tags": [
+          "local mock administration"
+        ],
+        "summary": "Reset Mock",
+        "operationId": "reset_mock_v1_mock_reset_post",
+        "parameters": [
+          {
+            "name": "X-Mock-Admin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Explicit local-development administration token."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Reset Mock V1 Mock Reset Post"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/mock/stats": {
+      "get": {
+        "tags": [
+          "local mock administration"
+        ],
+        "summary": "Get Stats",
+        "operationId": "get_stats_v1_mock_stats_get",
+        "parameters": [
+          {
+            "name": "X-Mock-Admin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Explicit local-development administration token."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AllDevicesTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "all_devices",
+            "title": "Kind"
+          },
+          "device_id": {
+            "type": "null",
+            "title": "Device Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "AllDevicesTarget"
+      },
+      "AllOtherDevicesTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "all_other_devices",
+            "title": "Kind"
+          },
+          "device_id": {
+            "type": "null",
+            "title": "Device Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "AllOtherDevicesTarget"
+      },
+      "BootstrapIn": {
+        "properties": {
+          "handle": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "title": "Handle"
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Device Name"
+          },
+          "device_kind": {
+            "type": "string",
+            "enum": [
+              "browser_extension",
+              "pwa",
+              "web",
+              "test"
+            ],
+            "title": "Device Kind",
+            "default": "web"
+          },
+          "public_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "handle",
+          "device_name"
+        ],
+        "title": "BootstrapIn"
+      },
+      "BootstrapOut": {
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/UserOut"
+          },
+          "device": {
+            "$ref": "#/components/schemas/DeviceOut"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "bearer",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user",
+          "device",
+          "access_token",
+          "expires_at"
+        ],
+        "title": "BootstrapOut"
+      },
+      "CapabilityFeatures": {
+        "properties": {
+          "realtime": {
+            "type": "boolean",
+            "title": "Realtime"
+          },
+          "web_push_delivery": {
+            "type": "boolean",
+            "title": "Web Push Delivery"
+          },
+          "web_push_subscription_registration": {
+            "type": "boolean",
+            "title": "Web Push Subscription Registration"
+          },
+          "e2ee": {
+            "type": "boolean",
+            "title": "E2Ee"
+          },
+          "direct_upload": {
+            "type": "boolean",
+            "title": "Direct Upload"
+          },
+          "device_registration": {
+            "type": "boolean",
+            "title": "Device Registration"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "realtime",
+          "web_push_delivery",
+          "web_push_subscription_registration",
+          "e2ee",
+          "direct_upload",
+          "device_registration"
+        ],
+        "title": "CapabilityFeatures"
+      },
+      "CapabilityLimits": {
+        "properties": {
+          "max_file_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max File Bytes"
+          },
+          "max_push_payload_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Push Payload Bytes"
+          },
+          "file_ttl_seconds": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "File Ttl Seconds"
+          },
+          "default_push_ttl_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Default Push Ttl Seconds"
+          },
+          "default_file_ttl_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Default File Ttl Seconds"
+          },
+          "file_alias_ttl_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "File Alias Ttl Seconds"
+          },
+          "max_devices": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Devices"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "max_file_bytes",
+          "max_push_payload_bytes",
+          "file_ttl_seconds",
+          "default_push_ttl_seconds",
+          "default_file_ttl_seconds",
+          "file_alias_ttl_seconds",
+          "max_devices"
+        ],
+        "title": "CapabilityLimits"
+      },
+      "CapabilityTransports": {
+        "properties": {
+          "realtime": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "poll",
+                "websocket"
+              ]
+            },
+            "type": "array",
+            "title": "Realtime"
+          },
+          "upload": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "server-ticket",
+                "presigned-url"
+              ]
+            },
+            "type": "array",
+            "title": "Upload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "realtime",
+          "upload"
+        ],
+        "title": "CapabilityTransports"
+      },
+      "DeviceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "public_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Key"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "is_current": {
+            "type": "boolean",
+            "title": "Is Current",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "kind",
+          "name",
+          "public_key",
+          "created_at",
+          "last_seen_at",
+          "revoked_at"
+        ],
+        "title": "DeviceOut"
+      },
+      "DevicePatch": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "DevicePatch"
+      },
+      "DeviceTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "device",
+            "title": "Kind"
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Device Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "device_id"
+        ],
+        "title": "DeviceTarget"
+      },
+      "DownloadTicketOut": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "download_url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri-reference",
+            "title": "Download Url"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_id",
+          "download_url",
+          "expires_at"
+        ],
+        "title": "DownloadTicketOut"
+      },
+      "FileDescriptorV1": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Mime Type"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "mime_type",
+          "size"
+        ],
+        "title": "FileDescriptorV1"
+      },
+      "FileEncryptedPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "file",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "File Id"
+          },
+          "payload": {
+            "type": "null",
+            "title": "Payload"
+          },
+          "ciphertext": {
+            "type": "string",
+            "maxLength": 2000000,
+            "minLength": 1,
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "file_id",
+          "ciphertext",
+          "nonce"
+        ],
+        "title": "FileEncryptedPushCreate"
+      },
+      "FileInitIn": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Content Type",
+            "default": "application/octet-stream"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2592000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "size"
+        ],
+        "title": "FileInitIn"
+      },
+      "FileInitOut": {
+        "properties": {
+          "file": {
+            "$ref": "#/components/schemas/FileOut"
+          },
+          "upload_url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri-reference",
+            "title": "Upload Url"
+          },
+          "upload_method": {
+            "type": "string",
+            "const": "PUT",
+            "title": "Upload Method",
+            "default": "PUT"
+          },
+          "upload_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Upload Expires At"
+          },
+          "upload_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Upload Headers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file",
+          "upload_url",
+          "upload_expires_at",
+          "upload_headers"
+        ],
+        "title": "FileInitOut"
+      },
+      "FileOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
+          "expected_size": {
+            "type": "integer",
+            "title": "Expected Size"
+          },
+          "actual_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Size"
+          },
+          "expected_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Sha256"
+          },
+          "actual_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Sha256"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "uploaded",
+              "ready",
+              "expired",
+              "deleted"
+            ],
+            "title": "State"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "delete_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "retention_expired",
+                  "storage_pressure",
+                  "user_deleted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delete Reason"
+          },
+          "alias_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "original_name",
+          "content_type",
+          "expected_size",
+          "actual_size",
+          "expected_sha256",
+          "actual_sha256",
+          "state",
+          "created_at",
+          "completed_at",
+          "expires_at",
+          "deleted_at"
+        ],
+        "title": "FileOut"
+      },
+      "FilePayloadV1": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Body"
+          },
+          "file": {
+            "$ref": "#/components/schemas/FileDescriptorV1"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "FilePayloadV1"
+      },
+      "FilePlainPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "file",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "File Id"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/FilePayloadV1"
+          },
+          "ciphertext": {
+            "type": "null",
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "null",
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "file_id",
+          "payload"
+        ],
+        "title": "FilePlainPushCreate"
+      },
+      "FileRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "uploaded",
+              "ready",
+              "expired",
+              "deleted"
+            ],
+            "title": "State"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Size"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "delete_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "retention_expired",
+                  "storage_pressure",
+                  "user_deleted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delete Reason"
+          },
+          "alias_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alias Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "size",
+          "expires_at"
+        ],
+        "title": "FileRef"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LinkDeviceIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "browser_extension",
+              "pwa",
+              "web",
+              "test"
+            ],
+            "title": "Kind"
+          },
+          "public_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "LinkDeviceIn"
+      },
+      "LinkDeviceOut": {
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceOut"
+          },
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "bearer",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "device",
+          "access_token",
+          "expires_at"
+        ],
+        "title": "LinkDeviceOut"
+      },
+      "LinkEncryptedPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "link",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "null",
+            "title": "File Id"
+          },
+          "payload": {
+            "type": "null",
+            "title": "Payload"
+          },
+          "ciphertext": {
+            "type": "string",
+            "maxLength": 2000000,
+            "minLength": 1,
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "ciphertext",
+          "nonce"
+        ],
+        "title": "LinkEncryptedPushCreate"
+      },
+      "LinkPayloadV1": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri",
+            "title": "Url"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "LinkPayloadV1"
+      },
+      "LinkPlainPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "link",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "null",
+            "title": "File Id"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/LinkPayloadV1"
+          },
+          "ciphertext": {
+            "type": "null",
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "null",
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "LinkPlainPushCreate"
+      },
+      "NoteEncryptedPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "note",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "null",
+            "title": "File Id"
+          },
+          "payload": {
+            "type": "null",
+            "title": "Payload"
+          },
+          "ciphertext": {
+            "type": "string",
+            "maxLength": 2000000,
+            "minLength": 1,
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "ciphertext",
+          "nonce"
+        ],
+        "title": "NoteEncryptedPushCreate"
+      },
+      "NotePayloadV1": {
+        "anyOf": [
+          {
+            "required": [
+              "title"
+            ]
+          },
+          {
+            "required": [
+              "body"
+            ]
+          }
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "NotePayloadV1"
+      },
+      "NotePlainPushCreate": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "payload_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Payload Version",
+            "default": 1
+          },
+          "client_guid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Guid"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 31536000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "type": {
+            "type": "string",
+            "const": "note",
+            "title": "Type"
+          },
+          "file_id": {
+            "type": "null",
+            "title": "File Id"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/NotePayloadV1"
+          },
+          "ciphertext": {
+            "type": "null",
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "type": "null",
+            "title": "Nonce"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "payload"
+        ],
+        "title": "NotePlainPushCreate"
+      },
+      "PushCreate": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NotePlainPushCreate"
+          },
+          {
+            "$ref": "#/components/schemas/NoteEncryptedPushCreate"
+          },
+          {
+            "$ref": "#/components/schemas/LinkPlainPushCreate"
+          },
+          {
+            "$ref": "#/components/schemas/LinkEncryptedPushCreate"
+          },
+          {
+            "$ref": "#/components/schemas/FilePlainPushCreate"
+          },
+          {
+            "$ref": "#/components/schemas/FileEncryptedPushCreate"
+          }
+        ],
+        "title": "PushCreate",
+        "description": "Six mutually exclusive request shapes represented as OpenAPI ``oneOf``."
+      },
+      "PushListOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PushOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "title": "PushListOut"
+      },
+      "PushOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "source_device_id": {
+            "type": "string",
+            "title": "Source Device Id"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PushTarget"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "note",
+              "link",
+              "file"
+            ],
+            "title": "Type"
+          },
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "file_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload_version": {
+            "type": "integer",
+            "title": "Payload Version"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NotePayloadV1"
+              },
+              {
+                "$ref": "#/components/schemas/LinkPayloadV1"
+              },
+              {
+                "$ref": "#/components/schemas/FilePayloadV1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "ciphertext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ciphertext"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          },
+          "client_guid": {
+            "type": "string",
+            "title": "Client Guid"
+          },
+          "pinned": {
+            "type": "boolean",
+            "title": "Pinned"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "dismissed",
+              "deleted",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "modified_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Modified At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "expired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expired At"
+          },
+          "dismissed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "is_for_current_device": {
+            "type": "boolean",
+            "title": "Is For Current Device"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "source_device_id",
+          "target",
+          "type",
+          "file_id",
+          "file_ref",
+          "payload_version",
+          "payload",
+          "ciphertext",
+          "nonce",
+          "client_guid",
+          "pinned",
+          "status",
+          "created_at",
+          "modified_at",
+          "expires_at",
+          "expired_at",
+          "dismissed_at",
+          "deleted_at",
+          "is_for_current_device"
+        ],
+        "title": "PushOut"
+      },
+      "PushPatch": {
+        "properties": {
+          "dismissed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dismissed"
+          },
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PushPatch"
+      },
+      "PushTarget": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AllOtherDevicesTarget"
+          },
+          {
+            "$ref": "#/components/schemas/AllDevicesTarget"
+          },
+          {
+            "$ref": "#/components/schemas/DeviceTarget"
+          }
+        ],
+        "title": "PushTarget",
+        "description": "Named discriminated union used by both requests and responses.",
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "all_devices": "#/components/schemas/AllDevicesTarget",
+            "all_other_devices": "#/components/schemas/AllOtherDevicesTarget",
+            "device": "#/components/schemas/DeviceTarget"
+          }
+        }
+      },
+      "StatsOut": {
+        "properties": {
+          "users": {
+            "type": "integer",
+            "title": "Users"
+          },
+          "devices": {
+            "type": "integer",
+            "title": "Devices"
+          },
+          "active_sessions": {
+            "type": "integer",
+            "title": "Active Sessions"
+          },
+          "pushes": {
+            "type": "integer",
+            "title": "Pushes"
+          },
+          "files": {
+            "type": "integer",
+            "title": "Files"
+          },
+          "stored_bytes": {
+            "type": "integer",
+            "title": "Stored Bytes"
+          },
+          "subscriptions": {
+            "type": "integer",
+            "title": "Subscriptions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "users",
+          "devices",
+          "active_sessions",
+          "pushes",
+          "files",
+          "stored_bytes",
+          "subscriptions"
+        ],
+        "title": "StatsOut"
+      },
+      "StorageUsageOut": {
+        "properties": {
+          "used_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Used Bytes"
+          },
+          "reserved_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Reserved Bytes"
+          },
+          "quota_bytes": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Quota Bytes"
+          },
+          "reclaimable_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes"
+          },
+          "pressure": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "notice",
+              "constrained",
+              "emergency"
+            ],
+            "title": "Pressure"
+          },
+          "policy_id": {
+            "type": "string",
+            "title": "Policy Id"
+          },
+          "default_retention_days": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Default Retention Days"
+          },
+          "early_eviction_possible": {
+            "type": "boolean",
+            "title": "Early Eviction Possible"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "used_bytes",
+          "reserved_bytes",
+          "quota_bytes",
+          "reclaimable_bytes",
+          "pressure",
+          "policy_id",
+          "default_retention_days",
+          "early_eviction_possible"
+        ],
+        "title": "StorageUsageOut"
+      },
+      "SubscriptionIn": {
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Endpoint"
+          },
+          "p256dh": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "P256Dh"
+          },
+          "auth": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Auth"
+          },
+          "storage_namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Namespace"
+          },
+          "local_cache_max_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Cache Max Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "endpoint",
+          "p256dh",
+          "auth"
+        ],
+        "title": "SubscriptionIn"
+      },
+      "SubscriptionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "title": "Endpoint"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "device_id",
+          "endpoint",
+          "created_at",
+          "revoked_at"
+        ],
+        "title": "SubscriptionOut"
+      },
+      "SystemCapabilitiesOut": {
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "title": "Api Version"
+          },
+          "environment_id": {
+            "type": "string",
+            "title": "Environment Id"
+          },
+          "features": {
+            "$ref": "#/components/schemas/CapabilityFeatures"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/CapabilityLimits"
+          },
+          "transports": {
+            "$ref": "#/components/schemas/CapabilityTransports"
+          },
+          "recommended_poll_interval_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Recommended Poll Interval Seconds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "api_version",
+          "environment_id",
+          "features",
+          "limits",
+          "transports",
+          "recommended_poll_interval_seconds"
+        ],
+        "title": "SystemCapabilitiesOut"
+      },
+      "UserOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "handle": {
+            "type": "string",
+            "title": "Handle"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "handle",
+          "created_at"
+        ],
+        "title": "UserOut"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WebPushConfigOut": {
+        "properties": {
+          "subscription_registration": {
+            "type": "boolean",
+            "title": "Subscription Registration"
+          },
+          "delivery": {
+            "type": "boolean",
+            "title": "Delivery"
+          },
+          "vapid_public_key": {
+            "type": "string",
+            "title": "Vapid Public Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subscription_registration",
+          "delivery",
+          "vapid_public_key"
+        ],
+        "title": "WebPushConfigOut"
+      },
+      "ApiErrorDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "examples": [
+              "file_not_ready",
+              "idempotency_conflict"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ApiErrorDetail"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "DeviceBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "headers": {
+      "XRequestID": {
+        "description": "Request identifier echoed in server logs and error details.",
+        "schema": {
+          "type": "string",
+          "pattern": "^req_[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request cursor or other syntax is invalid.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, expired, or revoked device token.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Ticket or administrative credential is invalid.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource does not exist or belongs to another user.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Current resource state prevents the operation.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Gone": {
+        "description": "File or ticket has expired.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "File or payload exceeds the configured limit.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "UnprocessableContent": {
+        "description": "Uploaded bytes fail size, digest, or state verification.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "The local mock encountered an unexpected error.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "InsufficientStorage": {
+        "description": "Storage pressure prevents accepting the upload.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    }
+  }
+}
