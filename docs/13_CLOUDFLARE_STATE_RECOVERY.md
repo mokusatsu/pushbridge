@@ -51,6 +51,7 @@ The first attempt to apply that routing-only update was rejected with Cloudflare
 - `/healthz` returns Worker JSON with HTTP 200. Bootstrap status reports D1, R2, and Durable Object bindings. Capabilities reports the real `0.2.0-worker-poc` API.
 - The remote smoke test passes device registration, Bearer enforcement, a two-device Note transfer, idempotent replay, conflict rejection, cursor delta sync, PWA assets, SPA fallback, and Service Worker delivery.
 - The deployed PWA was also exercised in a browser: bootstrap and same-origin API sync succeeded, a Note was sent, and the per-user IndexedDB view showed one cached Push. A separate local browser test verified that the same cached Note remains visible after the Worker is stopped and the PWA is reloaded offline.
+- The first Linux CI run revealed that the local Wrangler config still referenced the former `apps/web-pwa/dist` output. Windows had a stale local copy, while a clean runner did not. Local Wrangler now serves the same `infra/cloudflare/app/dist` artifact produced by Vite and used by Terraform.
 
 The R2 CORS/lifecycle resources carry a provider warning that later removal may require manual Cloudflare cleanup.
 
