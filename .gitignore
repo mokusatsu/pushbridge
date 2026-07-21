@@ -7,3 +7,5 @@ data/
 *.sqlite3
 *.log
 .DS_Store
+infra/backend-r2.hcl
+infra/backend.tf
