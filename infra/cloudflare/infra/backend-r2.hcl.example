@@ -1,7 +1,10 @@
-# Pass this file with: terraform init -backend-config=backend-r2.hcl
+# Copy this example to the ignored backend-r2.hcl, then pass it with:
+# terraform init -backend-config=backend-r2.hcl
 # Export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the dedicated R2 state token.
-bucket = "relaypush-terraform-state"
-key    = "relaypush/prod/terraform.tfstate"
+# The dev stack currently uses this bucket/key. Changing either selects a
+# different state object; do not treat such a change as an in-place migration.
+bucket = "pushbridge-terraform-state"
+key    = "pushbridge/dev/terraform.tfstate"
 region = "auto"
 
 endpoints = {

@@ -11,7 +11,7 @@ variable "account_id" {
 variable "project_name" {
   description = "Lowercase DNS-style project name used as the resource-name prefix."
   type        = string
-  default     = "relaypush"
+  default     = "pushbridge"
 
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$", var.project_name))
@@ -90,13 +90,7 @@ variable "access_ip_allowlist" {
     hostname = string
     cidrs    = set(string)
   })
-  default = {
-    hostname = "pushbridge-dev.mokusatsu.workers.dev"
-    cidrs = [
-      "217.178.53.176/32",
-      "2409:11:bce0:600:b884:a1bc:2b95:bddd/128",
-    ]
-  }
+  default  = null
   nullable = true
 
   validation {

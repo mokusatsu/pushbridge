@@ -1,4 +1,4 @@
-# RelayPush Cloudflare IaC
+# Pushbridge Cloudflare IaC
 
 Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTerraformスタックです。次を一括管理します。
 
@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerは**安全なブートストラップ**です。`/healthz`と`/api/bootstrap/status`だけが正常応答し、認証未実装のAPIとWebSocketは`501`を返します。アプリケーションAPIへ差し替える前に、不特定ユーザーへ送信機能を公開しません。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link、cursor同期、pin／dismiss／delete、storage usageを実装済みです。File API、Web Push配送、WebSocket realtime、正式認証は未実装で、Capabilitiesも未完成機能を`false`として返します。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
 ## ディレクトリ構成
 
@@ -108,10 +108,10 @@ Workerの環境変数ではStatic Assetsを保護できないため、Cloudflare
 
 ```hcl
 access_ip_allowlist = {
-  hostname = "pushbridge-dev.mokusatsu.workers.dev"
+  hostname = "pushbridge-dev.<your-workers-subdomain>.workers.dev"
   cidrs = [
-    "217.178.53.176/32",
-    "2409:11:bce0:600:b884:a1bc:2b95:bddd/128",
+    "203.0.113.10/32",
+    "2001:db8::1234/128",
   ]
 }
 ```

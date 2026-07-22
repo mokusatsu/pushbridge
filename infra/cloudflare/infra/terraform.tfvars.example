@@ -1,15 +1,15 @@
 # Do not put CLOUDFLARE_API_TOKEN here. Export it as an environment variable.
 account_id   = "0123456789abcdef0123456789abcdef"
-project_name = "relaypush"
+project_name = "pushbridge"
 environment  = "dev"
 
 # Protect the complete hostname (Worker API and Static Assets) with Cloudflare
 # Access. Use /32 for one IPv4 address. Set access_ip_allowlist = null to disable.
 access_ip_allowlist = {
-  hostname = "pushbridge-dev.mokusatsu.workers.dev"
+  hostname = "pushbridge-dev.<your-workers-subdomain>.workers.dev"
   cidrs = [
-    "217.178.53.176/32",
-    "2409:11:bce0:600:b884:a1bc:2b95:bddd/128",
+    "203.0.113.10/32",
+    "2001:db8::1234/128",
   ]
 }
 
@@ -31,7 +31,7 @@ access_ip_allowlist = {
 
 # When using only workers.dev, add the exact hostname once known:
 # additional_app_hostnames = [
-#   "relaypush-dev.<your-workers-subdomain>.workers.dev",
+#   "pushbridge-dev.<your-workers-subdomain>.workers.dev",
 #   "localhost"
 # ]
 

@@ -9,6 +9,23 @@
 
 サイズは相対値`S/M/L/XL`であり、納期の約束ではない。
 
+## 2026-07-22 現在の実装状況
+
+| 項目 | 状態 |
+|---|---|
+| RP-001 モノレポ／共通check | 部分完了。React PWA、RelayMock、Cloudflare IaCを単一workspaceで検証可能 |
+| RP-002 Worker TypeScript化 | 未完了。実APIは単一`worker/index.mjs`に実装済み |
+| RP-003 Cloudflare統合test | 部分完了。D1／R2／DO bindingを使うlocal smokeはあるが、Worker routeの独立した統合test suiteが不足 |
+| RP-201 Push作成と冪等性 | PoC実装済み。cross-user target、100回再送などの堅牢化試験が不足 |
+| RP-202 cursor同期 | PoC実装済み。署名、改変拒否、200件超paginationが不足 |
+| RP-203 dismiss／pin／delete | PoC実装済み。保持期限cleanupは不足 |
+| RP-204 Link | PoC実装済み。安全なscheme検証を再確認する必要あり |
+| RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
+| RP-601〜605 Worker File／R2 | RelayMockのみ実装済み。Cloudflare Worker側は未実装 |
+| RP-502〜503 Web Push | RelayMock subscriptionのみ。Worker配送とcached ACKは未実装 |
+
+Cloudflare devではTerraform、D1 migration 0001／0002、Worker、PWA、Accessを適用済み。現在の優先順はWorkerの分割・既存API堅牢化、File API＋R2縦切り、Web Push配送確認、保持期限cleanupである。
+
 ## Epic E0 — リポジトリと開発基盤
 
 ### RP-001 [P0/S] モノレポ構成を確定
