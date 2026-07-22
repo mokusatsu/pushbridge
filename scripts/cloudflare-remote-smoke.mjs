@@ -1,13 +1,30 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
+
 const origin = (process.env.PUSHBRIDGE_REMOTE_ORIGIN ?? "https://pushbridge-dev.mokusatsu.workers.dev").replace(/\/$/, "");
+const accessClientId = process.env.CF_ACCESS_CLIENT_ID;
+const accessClientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
+
+if (Boolean(accessClientId) !== Boolean(accessClientSecret)) {
+  throw new Error("Set both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, or neither.");
+}
+
+function withAccess(init = {}) {
+  const headers = new Headers(init.headers);
+  if (accessClientId && accessClientSecret) {
+    headers.set("CF-Access-Client-Id", accessClientId);
+    headers.set("CF-Access-Client-Secret", accessClientSecret);
+  }
+  return { ...init, headers, signal: init.signal ?? AbortSignal.timeout(10_000) };
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
 async function request(path, init = {}) {
-  const response = await fetch(`${origin}${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10_000) });
+  const response = await fetch(`${origin}${path}`, withAccess(init));
   const contentType = response.headers.get("content-type") ?? "";
   const body = contentType.includes("json") ? await response.json() : await response.text();
   return { response, body };
@@ -20,6 +37,7 @@ function expectStatus(result, status, label) {
 const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 let authA;
 let deviceBId;
+let fileId;
 const createdPushIds = [];
 
 try {
@@ -34,6 +52,8 @@ try {
   const capabilities = await request("/api/v1/system/capabilities");
   expectStatus(capabilities, 200, "capabilities");
   assert(capabilities.body.features?.device_registration === true, "device registration is unavailable");
+  assert(capabilities.body.features?.direct_upload === false, "server-ticket must not be advertised as direct upload");
+  assert(capabilities.body.transports?.upload?.includes("server-ticket"), "server-ticket upload transport is unavailable");
 
   const bootstrap = await request("/api/v1/auth/bootstrap", {
     method: "POST",
@@ -109,6 +129,71 @@ try {
   expectStatus(pageTwo, 200, "device B cursor sync");
   assert(pageTwo.body.items.length === 1 && pageTwo.body.items[0].id === second.body.id, "cursor delta did not contain exactly the second Note");
 
+  const fileBytes = new TextEncoder().encode(`pushbridge-remote-${suffix}`);
+  const fileHash = createHash("sha256").update(fileBytes).digest("hex");
+  const initialized = await request("/api/v1/files/init", {
+    method: "POST",
+    headers: authA,
+    body: JSON.stringify({
+      filename: "remote-smoke.bin",
+      content_type: "application/octet-stream",
+      size: fileBytes.byteLength,
+      sha256: fileHash,
+      expires_in: 86_400,
+    }),
+  });
+  expectStatus(initialized, 201, "File init");
+  fileId = initialized.body.file?.id;
+  assert(typeof fileId === "string", "File init did not return an ID");
+  assert(new URL(initialized.body.upload_url).origin === origin, "upload ticket escaped the Worker origin");
+
+  const upload = await fetch(initialized.body.upload_url, withAccess({
+    method: "PUT",
+    headers: initialized.body.upload_headers,
+    body: fileBytes,
+  }));
+  assert(upload.status === 200, `File upload returned HTTP ${upload.status}`);
+  const completed = await request(`/api/v1/files/${encodeURIComponent(fileId)}/complete`, { method: "POST", headers: authA });
+  expectStatus(completed, 200, "File complete");
+  assert(completed.body.state === "ready" && completed.body.actual_sha256 === fileHash, "File complete did not verify the uploaded bytes");
+
+  const fileKey = `file-${suffix}`;
+  const filePush = await request("/api/v1/pushes", {
+    method: "POST",
+    headers: { ...authA, "idempotency-key": fileKey },
+    body: JSON.stringify({
+      type: "file",
+      file_id: fileId,
+      target: { kind: "device", device_id: deviceBId },
+      client_guid: fileKey,
+      payload: { file: { name: "remote-smoke.bin", size: fileBytes.byteLength } },
+    }),
+  });
+  expectStatus(filePush, 201, "File Push");
+  createdPushIds.push(filePush.body.id);
+  assert(filePush.body.file_ref?.state === "ready", "File Push did not contain a ready file_ref");
+
+  const fileDelta = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(pageTwo.body.next_cursor)}`, { headers: authB });
+  expectStatus(fileDelta, 200, "device B File cursor sync");
+  assert(fileDelta.body.items.length === 1 && fileDelta.body.items[0].id === filePush.body.id, "device B did not receive exactly the File Push");
+  const downloadTicket = await request(`/api/v1/files/${encodeURIComponent(fileId)}/download-ticket`, { method: "POST", headers: authB });
+  expectStatus(downloadTicket, 200, "File download ticket");
+  assert(new URL(downloadTicket.body.download_url).origin === origin, "download ticket escaped the Worker origin");
+  const downloaded = await fetch(downloadTicket.body.download_url, withAccess());
+  assert(downloaded.status === 200, `File download returned HTTP ${downloaded.status}`);
+  assert(downloaded.headers.get("content-disposition")?.startsWith("attachment"), "File download was not forced as an attachment");
+  const downloadedBytes = new Uint8Array(await downloaded.arrayBuffer());
+  assert(createHash("sha256").update(downloadedBytes).digest("hex") === fileHash, "downloaded File bytes differ");
+
+  const deletedFile = await request(`/api/v1/files/${encodeURIComponent(fileId)}`, { method: "DELETE", headers: authA });
+  expectStatus(deletedFile, 200, "File delete");
+  assert(deletedFile.body.state === "deleted", "File delete did not reach the deleted state");
+  const staleDownload = await fetch(downloadTicket.body.download_url, withAccess());
+  assert(staleDownload.status === 410, `deleted File ticket returned HTTP ${staleDownload.status}`);
+  const deletedDelta = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(fileDelta.body.next_cursor)}`, { headers: authB });
+  expectStatus(deletedDelta, 200, "device B deleted File cursor sync");
+  assert(deletedDelta.body.items.length === 1 && deletedDelta.body.items[0].file_ref?.state === "deleted", "deleted file_ref was not cursor-synchronized");
+
   const root = await request("/");
   expectStatus(root, 200, "PWA root");
   assert(String(root.body).includes('id="root"'), "PWA root element is missing");
@@ -119,9 +204,12 @@ try {
   expectStatus(sw, 200, "Service Worker");
   assert(String(sw.body).includes("CACHE_NAME"), "Service Worker asset is invalid");
 
-  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note delivery, idempotency, cursor sync, PWA, SPA fallback, and Service Worker.`);
+  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, deletion, idempotency, cursor sync, PWA, SPA fallback, and Service Worker.`);
 } finally {
   if (authA) {
+    if (fileId) {
+      await request(`/api/v1/files/${encodeURIComponent(fileId)}`, { method: "DELETE", headers: authA }).catch(() => undefined);
+    }
     for (const pushId of createdPushIds) {
       await request(`/api/v1/pushes/${encodeURIComponent(pushId)}`, { method: "DELETE", headers: authA }).catch(() => undefined);
     }

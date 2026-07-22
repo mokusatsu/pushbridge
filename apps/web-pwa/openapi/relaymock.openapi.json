@@ -2246,8 +2246,11 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 2592000.0,
-                "minimum": 1.0
+                "enum": [
+                  86400,
+                  604800,
+                  2592000
+                ]
               },
               {
                 "type": "null"
@@ -2361,6 +2364,7 @@
               "pending",
               "uploaded",
               "ready",
+              "delete_pending",
               "expired",
               "deleted"
             ],
@@ -2551,6 +2555,7 @@
               "pending",
               "uploaded",
               "ready",
+              "delete_pending",
               "expired",
               "deleted"
             ],

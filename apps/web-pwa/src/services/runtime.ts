@@ -265,8 +265,8 @@ export class AppRuntime {
     const maxPayloadBytes = capabilities?.limits.max_push_payload_bytes ?? 2_000_000;
     if (draft.type === 'file' && !file) throw new Error('ファイルPushにはファイルが必要です。');
     if (draft.type !== 'file' && file) throw new Error('ノートまたはリンクPushへファイルを添付できません。');
-    if (file && capabilities && !capabilities.features.direct_upload) {
-      throw new Error('接続先APIはファイルの直接アップロードに対応していません。');
+    if (file && capabilities && capabilities.transports.upload.length === 0) {
+      throw new Error('接続先APIはファイルアップロードに対応していません。');
     }
     if (file && file.size > maxFileBytes) {
       throw new Error(`ファイルサイズが上限の${formatBytes(maxFileBytes)}を超えています。`);

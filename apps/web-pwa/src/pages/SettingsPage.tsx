@@ -315,7 +315,7 @@ export function SettingsPage() {
             <div><span>API</span><strong>{snapshot.capabilities.api_version}</strong></div>
             <div><span>環境</span><strong>{snapshot.capabilities.environment_id}</strong></div>
             <div><span>同期</span><strong>{snapshot.capabilities.features.realtime ? 'Realtime + REST' : `REST ${snapshot.capabilities.recommended_poll_interval_seconds}秒`}</strong></div>
-            <div><span>アップロード</span><strong>{snapshot.capabilities.features.direct_upload ? snapshot.capabilities.transports.upload.join(', ') : '非対応'}</strong></div>
+            <div><span>アップロード</span><strong>{snapshot.capabilities.transports.upload.length > 0 ? snapshot.capabilities.transports.upload.join(', ') : '非対応'}</strong></div>
             <div><span>最大ファイル</span><strong>{formatBytes(snapshot.capabilities.limits.max_file_bytes)}</strong></div>
             <div><span>最大Payload</span><strong>{formatBytes(snapshot.capabilities.limits.max_push_payload_bytes)}</strong></div>
             <div><span>端末上限</span><strong>{snapshot.capabilities.limits.max_devices}台</strong></div>

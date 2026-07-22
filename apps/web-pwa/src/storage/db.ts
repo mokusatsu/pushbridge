@@ -166,7 +166,7 @@ export class AppDatabase {
             local_file_cached: Boolean(existing.local_file_cached || cached),
             local_file_delivery: existing.local_file_cached || cached
               ? 'cached'
-              : incoming.file && (incoming.file.state === 'deleted' || incoming.file.state === 'expired')
+              : incoming.file && (incoming.file.state === 'delete_pending' || incoming.file.state === 'deleted' || incoming.file.state === 'expired')
                 ? 'missed'
                 : existing.local_file_delivery ?? 'pending',
             local_archived_at: incoming.status === 'deleted' || incoming.status === 'expired'
@@ -177,7 +177,7 @@ export class AppDatabase {
             local_file_cached: Boolean(cached),
             local_file_delivery: cached
               ? 'cached'
-              : incoming.file && (incoming.file.state === 'deleted' || incoming.file.state === 'expired')
+              : incoming.file && (incoming.file.state === 'delete_pending' || incoming.file.state === 'deleted' || incoming.file.state === 'expired')
                 ? 'missed'
                 : incoming.file_id ? 'pending' : undefined,
           });

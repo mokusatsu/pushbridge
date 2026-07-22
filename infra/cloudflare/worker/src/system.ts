@@ -31,7 +31,7 @@ export function capabilities(env: Env): Record<string, unknown> {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15_552_000,
       max_devices: 10,
     },
-    transports: { realtime: ["poll"], upload: [] },
+    transports: { realtime: ["poll"], upload: ["server-ticket"] },
     recommended_poll_interval_seconds: 30,
   };
 }

@@ -17,7 +17,10 @@ async function cleanupExpiredMetadata(env, runtime) {
 
 // infra/cloudflare/worker/src/crypto.ts
 async function sha256Hex(value) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
+  const digestInput = new Uint8Array(bytes.byteLength);
+  digestInput.set(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", digestInput.buffer);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function base64UrlEncode(bytes) {
@@ -236,19 +239,231 @@ async function bootstrap(request, env, requestId, runtime) {
 }
 
 // infra/cloudflare/worker/src/files.ts
+var MAX_FILE_BYTES = 25 * 1024 * 1024;
+var STORAGE_BUDGET_BYTES = 8 * 1024 * 1024 * 1024;
+var UPLOAD_TICKET_TTL_MS = 2 * 60 * 1e3;
+var DOWNLOAD_TICKET_TTL_MS = 2 * 60 * 1e3;
+var ALIAS_TTL_MS = 180 * 24 * 60 * 60 * 1e3;
+var TTL_SECONDS = /* @__PURE__ */ new Set([86400, 604800, 2592e3]);
+function fileOut(row) {
+  return {
+    id: row.id,
+    original_name: row.original_name,
+    content_type: row.content_type,
+    expected_size: Number(row.expected_size),
+    actual_size: row.actual_size == null ? null : Number(row.actual_size),
+    expected_sha256: row.expected_sha256,
+    actual_sha256: row.actual_sha256,
+    state: row.state,
+    created_at: iso(row.created_at),
+    completed_at: iso(row.completed_at),
+    expires_at: iso(row.expires_at),
+    deleted_at: iso(row.deleted_at),
+    delete_reason: row.delete_reason,
+    alias_expires_at: iso(row.alias_expires_at)
+  };
+}
+async function ownedFile(env, userId, fileId) {
+  return env.DB.prepare("SELECT * FROM files WHERE id = ? AND user_id = ?").bind(fileId, userId).first();
+}
+async function touchFilePushes(env, fileId, now) {
+  await env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId).run();
+}
+async function cleanupExpiredReservations(env, now) {
+  const expired = await env.DB.prepare(`SELECT * FROM files
+    WHERE state = 'pending' AND upload_reservation_expires_at <= ? ORDER BY upload_reservation_expires_at, id LIMIT 100`).bind(now).all();
+  for (const row of expired.results) {
+    await env.FILES.delete(row.r2_key);
+    await env.DB.prepare(`UPDATE files SET state = 'deleted', deleted_at = ?, delete_reason = 'retention_expired',
+      upload_reservation_expires_at = NULL WHERE id = ? AND state = 'pending'`).bind(now, row.id).run();
+  }
+}
+function ttlPrefix(seconds) {
+  return seconds === 86400 ? "1d" : seconds === 604800 ? "7d" : "30d";
+}
+async function initFile(request, env, auth, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  const allowedFields = /* @__PURE__ */ new Set(["filename", "content_type", "size", "sha256", "expires_in"]);
+  if (Object.keys(body).some((field) => !allowedFields.has(field))) {
+    return problem(422, "unexpected_field", "The file initialization request contains an unsupported field.", requestId);
+  }
+  const filename = typeof body.filename === "string" ? body.filename.trim() : "";
+  const contentType = typeof body.content_type === "string" ? body.content_type.trim() : "application/octet-stream";
+  const size = typeof body.size === "number" && Number.isSafeInteger(body.size) ? body.size : -1;
+  const expectedHash = typeof body.sha256 === "string" ? body.sha256.toLowerCase() : null;
+  const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 2592e3;
+  if (!filename || filename.length > 255) return problem(422, "invalid_filename", "filename must contain 1 to 255 characters.", requestId);
+  if (!contentType || contentType.length > 200) return problem(422, "invalid_content_type", "content_type must contain 1 to 200 characters.", requestId);
+  if (size < 0) return problem(422, "invalid_file_size", "size must be a non-negative integer.", requestId);
+  if (size > MAX_FILE_BYTES) return problem(413, "file_too_large", `The file limit is ${MAX_FILE_BYTES} bytes.`, requestId);
+  if (expectedHash != null && !/^[a-f0-9]{64}$/.test(expectedHash)) return problem(422, "invalid_sha256", "sha256 must be a hexadecimal SHA-256 digest.", requestId);
+  if (!TTL_SECONDS.has(expiresIn)) return problem(422, "invalid_file_ttl", "expires_in must be 86400, 604800, or 2592000 seconds.", requestId);
+  const now = runtime.now();
+  await cleanupExpiredReservations(env, now);
+  const usage = await env.DB.prepare(`SELECT
+    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
+    COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
+    FROM files`).first();
+  if (Number(usage?.used_bytes ?? 0) + Number(usage?.reserved_bytes ?? 0) + size > STORAGE_BUDGET_BYTES) {
+    return problem(507, "storage_pressure", "Storage capacity is temporarily unavailable.", requestId);
+  }
+  const fileId = runtime.id("fil");
+  const ticket = runtime.token();
+  const tokenHash = await sha256Hex(ticket);
+  const expiresAt = now + expiresIn * 1e3;
+  const reservationExpiresAt = now + UPLOAD_TICKET_TTL_MS;
+  const r2Key = `ttl/${ttlPrefix(expiresIn)}/${auth.user_id}/${fileId}/${crypto.randomUUID()}.bin`;
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO files
+      (id, user_id, r2_key, original_name, content_type, expected_size, actual_size,
+       expected_sha256, actual_sha256, state, created_at, completed_at, expires_at,
+       deleted_at, delete_reason, alias_expires_at, upload_reservation_expires_at,
+       r2_delete_attempts, r2_delete_retry_at, r2_delete_error_code)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`).bind(fileId, auth.user_id, r2Key, filename, contentType, size, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
+    env.DB.prepare(`INSERT INTO file_tickets
+      (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
+      VALUES (?, ?, ?, 'upload', ?, ?, NULL)`).bind(tokenHash, auth.user_id, fileId, now, reservationExpiresAt)
+  ]);
+  const row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) throw new Error("created file is missing");
+  const origin = new URL(request.url).origin;
+  return json({
+    file: fileOut(row),
+    upload_url: `${origin}/mock-storage/uploads/${encodeURIComponent(ticket)}`,
+    upload_method: "PUT",
+    upload_expires_at: iso(reservationExpiresAt),
+    upload_headers: { "content-type": "application/octet-stream" }
+  }, { status: 201, headers: { "x-request-id": requestId } });
+}
+async function uploadFile(request, env, requestId, ticket, runtime) {
+  const now = runtime.now();
+  await cleanupExpiredReservations(env, now);
+  const tokenHash = await sha256Hex(ticket);
+  const row = await env.DB.prepare(`SELECT f.*, t.expires_at AS ticket_expires_at, t.used_at AS ticket_used_at
+    FROM file_tickets t JOIN files f ON f.id = t.file_id
+    WHERE t.token_hash = ? AND t.purpose = 'upload'`).bind(tokenHash).first();
+  if (!row) return problem(403, "invalid_upload_ticket", "The upload ticket is invalid.", requestId);
+  if (row.ticket_expires_at <= now) return problem(410, "upload_ticket_expired", "The upload ticket has expired.", requestId);
+  if (row.ticket_used_at != null) return problem(403, "upload_ticket_used", "The upload ticket has already been used.", requestId);
+  if (row.expires_at <= now) return problem(410, "file_expired", "The file record has expired.", requestId);
+  if (row.state !== "pending") return problem(409, "invalid_file_state", "The file is not waiting for an upload.", requestId);
+  const contentLength = request.headers.get("content-length");
+  if (contentLength != null && (!/^\d+$/.test(contentLength) || Number(contentLength) > row.expected_size || Number(contentLength) > MAX_FILE_BYTES)) {
+    return problem(413, "upload_size_exceeded", "The uploaded body exceeds the declared or configured size.", requestId);
+  }
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength > row.expected_size || bytes.byteLength > MAX_FILE_BYTES) return problem(413, "upload_size_exceeded", "The uploaded body exceeds the declared or configured size.", requestId);
+  if (bytes.byteLength !== row.expected_size) return problem(422, "upload_size_mismatch", `Expected ${row.expected_size} bytes but received ${bytes.byteLength}.`, requestId);
+  const actualHash = await sha256Hex(new Uint8Array(bytes));
+  if (row.expected_sha256 && actualHash !== row.expected_sha256) return problem(422, "upload_hash_mismatch", "The uploaded body does not match the declared SHA-256.", requestId);
+  await env.FILES.put(row.r2_key, bytes, { customMetadata: { sha256: actualHash, fileId: row.id } });
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE files SET actual_size = ?, actual_sha256 = ?, state = 'uploaded',
+      upload_reservation_expires_at = NULL WHERE id = ? AND state = 'pending'`).bind(bytes.byteLength, actualHash, row.id),
+    env.DB.prepare("UPDATE file_tickets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL").bind(now, tokenHash),
+    env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, row.id)
+  ]);
+  const updated = await ownedFile(env, row.user_id, row.id);
+  if (!updated) throw new Error("uploaded file is missing");
+  return json(fileOut(updated), { headers: { "x-request-id": requestId } });
+}
+async function completeFile(env, auth, requestId, fileId, runtime) {
+  const row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
+  if (row.state === "ready") return json(fileOut(row), { headers: { "x-request-id": requestId, "idempotent-replayed": "true" } });
+  if (row.expires_at <= runtime.now() || row.state === "expired") return problem(410, "file_expired", "The file has expired.", requestId);
+  if (["delete_pending", "deleted"].includes(row.state)) return problem(409, "file_deleted", "A deleted file cannot be completed.", requestId);
+  if (row.state !== "uploaded") return problem(409, "file_not_uploaded", "Upload the file bytes before completing the file.", requestId);
+  const object = await env.FILES.get(row.r2_key);
+  if (!object) return problem(422, "object_missing", "The uploaded object bytes are missing.", requestId);
+  const bytes = await object.arrayBuffer();
+  if (bytes.byteLength !== row.expected_size || bytes.byteLength !== row.actual_size) return problem(422, "file_size_mismatch", "Stored size does not match the initialized and uploaded size.", requestId);
+  const actualHash = await sha256Hex(new Uint8Array(bytes));
+  if (actualHash !== row.actual_sha256 || row.expected_sha256 && actualHash !== row.expected_sha256) {
+    return problem(422, "file_hash_mismatch", "Stored bytes do not match the initialized SHA-256.", requestId);
+  }
+  const now = runtime.now();
+  await env.DB.prepare("UPDATE files SET state = 'ready', completed_at = ? WHERE id = ? AND state = 'uploaded'").bind(now, fileId).run();
+  await touchFilePushes(env, fileId, now);
+  const updated = await ownedFile(env, auth.user_id, fileId);
+  if (!updated) throw new Error("completed file is missing");
+  return json(fileOut(updated), { headers: { "x-request-id": requestId } });
+}
+async function getFile(env, auth, requestId, fileId) {
+  const row = await ownedFile(env, auth.user_id, fileId);
+  return row ? json(fileOut(row), { headers: { "x-request-id": requestId } }) : problem(404, "file_not_found", "File not found.", requestId);
+}
+async function createDownloadTicket(request, env, auth, requestId, fileId, runtime) {
+  const row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
+  if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
+  if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+  const ticket = runtime.token();
+  const now = runtime.now();
+  const expiresAt = now + DOWNLOAD_TICKET_TTL_MS;
+  await env.DB.prepare(`INSERT INTO file_tickets
+    (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
+    VALUES (?, ?, ?, 'download', ?, ?, NULL)`).bind(await sha256Hex(ticket), auth.user_id, fileId, now, expiresAt).run();
+  return json({ file_id: fileId, download_url: `${new URL(request.url).origin}/mock-storage/downloads/${encodeURIComponent(ticket)}`, expires_at: iso(expiresAt) }, {
+    headers: { "x-request-id": requestId }
+  });
+}
+async function downloadFile(env, requestId, ticket, runtime) {
+  const row = await env.DB.prepare(`SELECT f.*, t.expires_at AS ticket_expires_at, t.used_at AS ticket_used_at
+    FROM file_tickets t JOIN files f ON f.id = t.file_id
+    WHERE t.token_hash = ? AND t.purpose = 'download'`).bind(await sha256Hex(ticket)).first();
+  if (!row) return problem(403, "invalid_download_ticket", "The download ticket is invalid.", requestId);
+  if (row.ticket_expires_at <= runtime.now()) return problem(410, "download_ticket_expired", "The download ticket has expired.", requestId);
+  if (row.state !== "ready" || row.expires_at <= runtime.now()) return problem(410, "file_expired", "The file is no longer available.", requestId);
+  const object = await env.FILES.get(row.r2_key);
+  if (!object) return problem(410, "object_missing", "The object bytes are missing.", requestId);
+  const headers = new Headers({
+    "content-type": "application/octet-stream",
+    "content-disposition": 'attachment; filename="pushbridge-file.bin"',
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "x-request-id": requestId,
+    "content-length": String(object.size),
+    etag: object.httpEtag
+  });
+  return new Response(object.body, { headers });
+}
+async function deleteFile(env, auth, requestId, fileId, runtime) {
+  let row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
+  if (row.state === "deleted") return json(fileOut(row), { headers: { "x-request-id": requestId, "idempotent-replayed": "true" } });
+  const now = runtime.now();
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE files SET state = 'delete_pending', deleted_at = ?, delete_reason = 'user_deleted',
+      r2_delete_retry_at = ? WHERE id = ?`).bind(now, now, fileId),
+    env.DB.prepare("DELETE FROM file_tickets WHERE file_id = ? AND purpose = 'upload'").bind(fileId),
+    env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId)
+  ]);
+  try {
+    await env.FILES.delete(row.r2_key);
+    await env.DB.prepare(`UPDATE files SET state = 'deleted', r2_delete_retry_at = NULL,
+      r2_delete_error_code = NULL WHERE id = ?`).bind(fileId).run();
+  } catch {
+    await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
+      r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ?`).bind(now + 6e4, fileId).run();
+    return problem(503, "file_delete_pending", "File deletion will be retried.", requestId);
+  }
+  row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) throw new Error("deleted file is missing");
+  return json(fileOut(row), { headers: { "x-request-id": requestId } });
+}
 async function storageUsage(env, auth) {
   const row = await env.DB.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN state = 'ready' THEN encrypted_size ELSE 0 END), 0) AS used_bytes,
-    COALESCE(SUM(CASE WHEN state = 'pending' THEN encrypted_size ELSE 0 END), 0) AS reserved_bytes
+    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
+    COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
     FROM files WHERE user_id = ?`).bind(auth.user_id).first();
-  const quota = 8 * 1024 * 1024 * 1024;
   const usedBytes = Number(row?.used_bytes ?? 0);
   const reservedBytes = Number(row?.reserved_bytes ?? 0);
-  const ratio = (usedBytes + reservedBytes) / quota;
+  const ratio = (usedBytes + reservedBytes) / STORAGE_BUDGET_BYTES;
   return {
     used_bytes: usedBytes,
     reserved_bytes: reservedBytes,
-    quota_bytes: quota,
+    quota_bytes: STORAGE_BUDGET_BYTES,
     reclaimable_bytes: usedBytes,
     pressure: ratio >= 0.95 ? "emergency" : ratio >= 0.85 ? "constrained" : ratio >= 0.7 ? "notice" : "normal",
     policy_id: "free-v1",
@@ -256,7 +471,22 @@ async function storageUsage(env, auth) {
     early_eviction_possible: true
   };
 }
-async function handleFileRoute() {
+async function handlePublicFileRoute(request, env, requestId, path, runtime) {
+  const uploadMatch = path.match(/^\/mock-storage\/uploads\/([^/]+)$/);
+  if (uploadMatch && request.method === "PUT") return uploadFile(request, env, requestId, decodeURIComponent(uploadMatch[1]), runtime);
+  const downloadMatch = path.match(/^\/mock-storage\/downloads\/([^/]+)$/);
+  if (downloadMatch && request.method === "GET") return downloadFile(env, requestId, decodeURIComponent(downloadMatch[1]), runtime);
+  return null;
+}
+async function handleFileRoute(request, env, auth, requestId, path, runtime) {
+  if (path === "/v1/files/init" && request.method === "POST") return initFile(request, env, auth, requestId, runtime);
+  const completeMatch = path.match(/^\/v1\/files\/([^/]+)\/complete$/);
+  if (completeMatch && request.method === "POST") return completeFile(env, auth, requestId, decodeURIComponent(completeMatch[1]), runtime);
+  const downloadTicketMatch = path.match(/^\/v1\/files\/([^/]+)\/download-ticket$/);
+  if (downloadTicketMatch && request.method === "POST") return createDownloadTicket(request, env, auth, requestId, decodeURIComponent(downloadTicketMatch[1]), runtime);
+  const metadataMatch = path.match(/^\/v1\/files\/([^/]+)$/);
+  if (metadataMatch && request.method === "GET") return getFile(env, auth, requestId, decodeURIComponent(metadataMatch[1]));
+  if (metadataMatch && request.method === "DELETE") return deleteFile(env, auth, requestId, decodeURIComponent(metadataMatch[1]), runtime);
   return null;
 }
 
@@ -287,6 +517,15 @@ async function decodeCursor(value, auth, requestId) {
 
 // infra/cloudflare/worker/src/pushes.ts
 var encoder = new TextEncoder();
+var PUSH_SELECT = `SELECT
+  p.*,
+  f.state AS file_ref_state,
+  COALESCE(f.actual_size, f.expected_size) AS file_ref_size,
+  f.expires_at AS file_ref_expires_at,
+  f.deleted_at AS file_ref_deleted_at,
+  f.delete_reason AS file_ref_delete_reason,
+  f.alias_expires_at AS file_ref_alias_expires_at
+  FROM pushes p LEFT JOIN files f ON f.id = p.file_id`;
 function pushOut(row, currentDeviceId) {
   const targetKind = row.target_kind ?? (row.target_device_id ? "device" : "all_other_devices");
   return {
@@ -296,7 +535,15 @@ function pushOut(row, currentDeviceId) {
     target: { kind: targetKind, device_id: targetKind === "device" ? row.target_device_id : null },
     type: row.type,
     file_id: row.file_id ?? null,
-    file_ref: null,
+    file_ref: row.file_id && row.file_ref_state ? {
+      id: row.file_id,
+      state: row.file_ref_state,
+      size: row.file_ref_size == null ? null : Number(row.file_ref_size),
+      expires_at: iso(row.file_ref_expires_at),
+      deleted_at: iso(row.file_ref_deleted_at),
+      delete_reason: row.file_ref_delete_reason ?? null,
+      alias_expires_at: iso(row.file_ref_alias_expires_at)
+    } : null,
     payload_version: row.payload_version ?? 1,
     payload: row.payload_json ? JSON.parse(row.payload_json) : {},
     ciphertext: null,
@@ -313,13 +560,13 @@ function pushOut(row, currentDeviceId) {
     is_for_current_device: targetKind === "all_devices" || targetKind === "all_other_devices" && row.source_device_id !== currentDeviceId || targetKind === "device" && row.target_device_id === currentDeviceId
   };
 }
-function payloadEquals(row, type, targetKind, targetDeviceId, payloadJson) {
-  return row.type === type && row.target_kind === targetKind && (row.target_device_id ?? null) === targetDeviceId && (row.payload_json ?? "{}") === payloadJson;
+function payloadEquals(row, type, targetKind, targetDeviceId, fileId, payloadJson) {
+  return row.type === type && row.target_kind === targetKind && (row.target_device_id ?? null) === targetDeviceId && (row.file_id ?? null) === fileId && (row.payload_json ?? "{}") === payloadJson;
 }
 async function createPush(request, env, auth, requestId, runtime) {
   const body = await bodyJson(request, requestId);
   const type = typeof body.type === "string" ? body.type : "";
-  if (!["note", "link"].includes(type)) return problem(422, "unsupported_push_type", "The Worker currently accepts note and link pushes.", requestId);
+  if (!["note", "link", "file"].includes(type)) return problem(422, "unsupported_push_type", "Push type must be note, link, or file.", requestId);
   const idempotencyKey = request.headers.get("idempotency-key");
   if (idempotencyKey && idempotencyKey.length > 200) return problem(422, "invalid_idempotency_key", "Idempotency-Key must be 200 characters or fewer.", requestId);
   if (idempotencyKey && typeof body.client_guid === "string" && idempotencyKey !== body.client_guid) {
@@ -333,6 +580,8 @@ async function createPush(request, env, auth, requestId, runtime) {
     const url = payload.url;
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return problem(422, "invalid_link", "Link URLs must use http or https.", requestId);
   }
+  const fileId = type === "file" && typeof body.file_id === "string" ? body.file_id : null;
+  if (type === "file" && !fileId) return problem(422, "file_id_required", "A file push requires file_id.", requestId);
   const target = body.target && typeof body.target === "object" && !Array.isArray(body.target) ? body.target : { kind: "all_other_devices" };
   const targetKind = typeof target.kind === "string" ? target.kind : "all_other_devices";
   if (!["all_other_devices", "all_devices", "device"].includes(targetKind)) return problem(422, "invalid_target", "Invalid target kind.", requestId);
@@ -342,28 +591,35 @@ async function createPush(request, env, auth, requestId, runtime) {
     const targetDevice = await env.DB.prepare("SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(targetDeviceId, auth.user_id).first();
     if (!targetDevice) return problem(422, "invalid_target", "The target device is unavailable.", requestId);
   }
-  const replay = await env.DB.prepare("SELECT * FROM pushes WHERE user_id = ? AND client_guid = ?").bind(auth.user_id, clientGuid).first();
+  const replay = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first();
   if (replay) {
-    if (!payloadEquals(replay, type, targetKind, targetDeviceId, payloadJson)) {
+    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
     return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
+  let fileAliasExpiresAt = null;
+  if (fileId) {
+    const file = await env.DB.prepare("SELECT state, expires_at, alias_expires_at FROM files WHERE id = ? AND user_id = ?").bind(fileId, auth.user_id).first();
+    if (!file) return problem(404, "file_not_found", "The referenced file does not exist for this account.", requestId);
+    if (file.state !== "ready" || Number(file.expires_at) <= runtime.now()) return problem(409, "file_not_ready", "The referenced file is expired, deleted, or not ready.", requestId);
+    fileAliasExpiresAt = Number(file.alias_expires_at);
+  }
   const now = runtime.now();
   const expiresIn = typeof body.expires_in === "number" && Number.isFinite(body.expires_in) ? body.expires_in : 2592e3;
-  const expiresAt = now + Math.min(Math.max(1, expiresIn), 2592e3) * 1e3;
+  const expiresAt = fileAliasExpiresAt ?? now + Math.min(Math.max(1, expiresIn), 2592e3) * 1e3;
   const pushId = runtime.id("psh");
   try {
     await env.DB.prepare(`INSERT INTO pushes
-      (id, user_id, source_device_id, target_device_id, target_kind, type, payload_version,
+      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version,
        ciphertext, nonce, payload_json, client_guid, created_at, modified_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`).bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`).bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, fileId, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
   } catch {
-    const raced = await env.DB.prepare("SELECT * FROM pushes WHERE user_id = ? AND client_guid = ?").bind(auth.user_id, clientGuid).first();
-    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, payloadJson)) throw new Error("push insert failed");
+    const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first();
+    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ?").bind(pushId).first();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first();
   if (!row) throw new Error("created push is missing");
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
@@ -372,8 +628,8 @@ async function listPushes(url, env, auth, requestId) {
   const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.floor(requestedLimit) : 100));
   const cursor = await decodeCursor(url.searchParams.get("after"), auth, requestId);
   const includeDeleted = url.searchParams.get("include_deleted") !== "false";
-  const deletedClause = includeDeleted ? "" : " AND deleted_at IS NULL";
-  const result = cursor ? await env.DB.prepare(`SELECT * FROM pushes WHERE user_id = ?${deletedClause} AND (modified_at > ? OR (modified_at = ? AND id > ?)) ORDER BY modified_at, id LIMIT ?`).bind(auth.user_id, cursor.time, cursor.time, cursor.id, limit + 1).all() : await env.DB.prepare(`SELECT * FROM pushes WHERE user_id = ?${deletedClause} ORDER BY modified_at, id LIMIT ?`).bind(auth.user_id, limit + 1).all();
+  const deletedClause = includeDeleted ? "" : " AND p.deleted_at IS NULL";
+  const result = cursor ? await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ?${deletedClause} AND (p.modified_at > ? OR (p.modified_at = ? AND p.id > ?)) ORDER BY p.modified_at, p.id LIMIT ?`).bind(auth.user_id, cursor.time, cursor.time, cursor.id, limit + 1).all() : await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ?${deletedClause} ORDER BY p.modified_at, p.id LIMIT ?`).bind(auth.user_id, limit + 1).all();
   const rows = result.results.slice(0, limit);
   const last = rows.at(-1);
   return {
@@ -383,11 +639,11 @@ async function listPushes(url, env, auth, requestId) {
   };
 }
 async function getPush(env, auth, requestId, pushId) {
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ? AND user_id = ?").bind(pushId, auth.user_id).first();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ? AND p.user_id = ?`).bind(pushId, auth.user_id).first();
   return row ? json(pushOut(row, auth.device_id), { headers: { "x-request-id": requestId } }) : problem(404, "not_found", "Push not found.", requestId);
 }
 async function mutatePush(request, env, auth, requestId, pushId, runtime) {
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ? AND user_id = ?").bind(pushId, auth.user_id).first();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ? AND p.user_id = ?`).bind(pushId, auth.user_id).first();
   if (!row) return problem(404, "not_found", "Push not found.", requestId);
   const modifiedAt = Math.max(runtime.now(), Number(row.modified_at) + 1);
   if (request.method === "DELETE") {
@@ -399,7 +655,7 @@ async function mutatePush(request, env, auth, requestId, pushId, runtime) {
     const status = dismissedAt ? "dismissed" : "active";
     await env.DB.prepare("UPDATE pushes SET dismissed_at = ?, pinned_at = ?, modified_at = ?, status = ? WHERE id = ? AND user_id = ?").bind(dismissedAt, pinnedAt, modifiedAt, status, pushId, auth.user_id).run();
   }
-  const updated = await env.DB.prepare("SELECT * FROM pushes WHERE id = ?").bind(pushId).first();
+  const updated = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first();
   if (!updated) throw new Error("updated push is missing");
   return json(pushOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }
@@ -443,7 +699,7 @@ function capabilities(env) {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15552e3,
       max_devices: 10
     },
-    transports: { realtime: ["poll"], upload: [] },
+    transports: { realtime: ["poll"], upload: ["server-ticket"] },
     recommended_poll_interval_seconds: 30
   };
 }
@@ -472,6 +728,8 @@ function createRouter(runtime) {
         });
       }
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
+      const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
+      if (publicFileResponse) return publicFileResponse;
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
@@ -492,7 +750,7 @@ function createRouter(runtime) {
         return mutatePush(request, env, auth, requestId, decodeURIComponent(pushMatch[1]), runtime);
       }
       if (request.method === "GET" && path === "/v1/storage/usage") return json(await storageUsage(env, auth), { headers: { "x-request-id": requestId } });
-      const fileResponse = await handleFileRoute();
+      const fileResponse = await handleFileRoute(request, env, auth, requestId, path, runtime);
       if (fileResponse) return fileResponse;
       const subscriptionResponse = await handleSubscriptionRoute();
       if (subscriptionResponse) return subscriptionResponse;

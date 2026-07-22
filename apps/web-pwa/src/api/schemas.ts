@@ -11,7 +11,7 @@ import type {
 const nullableString = z.string().nullable();
 const optionalNullableString = nullableString.optional();
 const payloadSchema = z.record(z.string(), z.unknown());
-const fileStateSchema = z.enum(['pending', 'uploaded', 'ready', 'expired', 'deleted']);
+const fileStateSchema = z.enum(['pending', 'uploaded', 'ready', 'delete_pending', 'expired', 'deleted']);
 const fileDeleteReasonSchema = z.enum(['retention_expired', 'storage_pressure', 'user_deleted']);
 
 function stringValue(value: unknown): string | undefined {
@@ -131,7 +131,7 @@ const pushWireSchema = z.object({
 }).strict();
 
 function normalizeFileState(value: unknown): FileState | undefined {
-  return value === 'pending' || value === 'uploaded' || value === 'ready' || value === 'expired' || value === 'deleted'
+  return value === 'pending' || value === 'uploaded' || value === 'ready' || value === 'delete_pending' || value === 'expired' || value === 'deleted'
     ? value
     : undefined;
 }

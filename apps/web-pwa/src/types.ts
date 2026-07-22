@@ -1,6 +1,6 @@
 export type PushType = 'note' | 'link' | 'file';
 export type PushStatus = 'active' | 'dismissed' | 'deleted' | 'expired';
-export type FileState = 'pending' | 'uploaded' | 'ready' | 'expired' | 'deleted';
+export type FileState = 'pending' | 'uploaded' | 'ready' | 'delete_pending' | 'expired' | 'deleted';
 export type FileDeleteReason = 'retention_expired' | 'storage_pressure' | 'user_deleted';
 export type DeviceKind = 'pwa' | 'web' | 'browser_extension' | 'test' | 'unknown';
 export type TargetKind = 'all_other_devices' | 'all_devices' | 'device';

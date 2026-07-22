@@ -133,6 +133,19 @@ variable "access_ip_allowlist" {
   }
 }
 
+variable "access_service_token_ids" {
+  description = "Cloudflare Access Service Token resource IDs allowed to call the Access-protected dev hostname. The client secret must remain outside Terraform."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for token_id in var.access_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", token_id))
+    ])
+    error_message = "access_service_token_ids must contain Cloudflare Service Token UUIDs."
+  }
+}
+
 variable "custom_domain" {
   description = "Optional Worker custom domain. Supply either zone_id or zone_name."
   type = object({

@@ -132,4 +132,95 @@ describe('AppDatabase', () => {
       local_file_delivery: 'missed',
     });
   });
+
+  it('keeps an IndexedDB Blob available after the server file is deleted', async () => {
+    const db = createDb();
+    const readyFilePush: PushRecord = {
+      ...push,
+      id: 'push_cached_after_delete',
+      type: 'file',
+      file_id: 'file_cached_after_delete',
+      file: {
+        id: 'file_cached_after_delete',
+        name: 'cached.bin',
+        mime_type: 'application/octet-stream',
+        size: 4,
+        state: 'ready',
+        expires_at: '2026-02-01T00:00:00Z',
+      },
+      is_for_current_device: true,
+      modified_at: '2026-01-01T00:00:00Z',
+    };
+    await db.applyChanges([{
+      cursor: 'cached-1',
+      type: 'push.upsert',
+      entity_id: readyFilePush.id,
+      push: readyFilePush,
+    }], 'cached-1');
+    await db.putCachedFile({
+      file_id: 'file_cached_after_delete',
+      push_id: readyFilePush.id,
+      name: 'cached.bin',
+      mime_type: 'application/octet-stream',
+      size: 4,
+      blob: new Blob(['data']),
+      cached_at: '2026-01-01T00:01:00Z',
+      last_accessed_at: '2026-01-01T00:01:00Z',
+      pinned: false,
+    });
+
+    await db.applyChanges([{
+      cursor: 'cached-2',
+      type: 'push.upsert',
+      entity_id: readyFilePush.id,
+      push: {
+        ...readyFilePush,
+        file: {
+          ...readyFilePush.file!,
+          state: 'deleted',
+          deleted_at: '2026-01-02T00:00:00Z',
+          delete_reason: 'storage_pressure',
+        },
+        modified_at: '2026-01-02T00:00:00Z',
+      },
+    }], 'cached-2');
+
+    expect(await db.getCachedFile('file_cached_after_delete', false)).toMatchObject({ size: 4 });
+    expect(await db.getPush(readyFilePush.id)).toMatchObject({
+      local_file_cached: true,
+      local_file_delivery: 'cached',
+      file: { state: 'deleted' },
+    });
+  });
+
+  it('marks delete-pending aliases as missed when no local Blob exists', async () => {
+    const db = createDb();
+    const deletePendingPush: PushRecord = {
+      ...push,
+      id: 'push_delete_pending',
+      type: 'file',
+      file_id: 'file_delete_pending',
+      file: {
+        id: 'file_delete_pending',
+        name: 'pending.bin',
+        mime_type: 'application/octet-stream',
+        size: 10,
+        state: 'delete_pending',
+        delete_reason: 'storage_pressure',
+      },
+      is_for_current_device: true,
+      modified_at: '2026-01-02T00:00:00Z',
+    };
+    await db.applyChanges([{
+      cursor: 'pending-1',
+      type: 'push.upsert',
+      entity_id: deletePendingPush.id,
+      push: deletePendingPush,
+    }], 'pending-1');
+
+    expect(await db.getPush(deletePendingPush.id)).toMatchObject({
+      local_file_cached: false,
+      local_file_delivery: 'missed',
+    });
+  });
 });

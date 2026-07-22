@@ -19,7 +19,7 @@ from pydantic_core import CoreSchema
 
 DeviceKind = Literal["browser_extension", "pwa", "web", "test"]
 PushType = Literal["note", "link", "file"]
-FileState = Literal["pending", "uploaded", "ready", "expired", "deleted"]
+FileState = Literal["pending", "uploaded", "ready", "delete_pending", "expired", "deleted"]
 FileDeleteReason = Literal["retention_expired", "storage_pressure", "user_deleted"]
 PushStatus = Literal["active", "dismissed", "deleted", "expired"]
 UriReference = Annotated[
@@ -346,7 +346,7 @@ class FileInitIn(StrictModel):
     )
     size: int = Field(ge=0)
     sha256: str | None = Field(default=None, pattern=r"^[A-Fa-f0-9]{64}$")
-    expires_in: int | None = Field(default=None, ge=1, le=30 * 24 * 60 * 60)
+    expires_in: Literal[86_400, 604_800, 2_592_000] | None = None
 
 
 class FileOut(StrictModel):

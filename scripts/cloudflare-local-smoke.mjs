@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -70,6 +71,8 @@ try {
   assert(status.response.status === 200 && status.body.bootstrap === false && status.body.bindings.d1, "bootstrap status failed");
   const capabilities = await request("/api/v1/system/capabilities");
   assert(capabilities.response.status === 200 && capabilities.body.features.device_registration, "capabilities failed");
+  assert(capabilities.body.features.direct_upload === false, "streaming adapter must not be advertised as direct upload");
+  assert(capabilities.body.transports.upload.includes("server-ticket"), "server-ticket upload transport is missing");
 
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const bootstrap = await request("/api/v1/auth/bootstrap", {
@@ -139,6 +142,48 @@ try {
   const pageTwo = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(cursor)}`, { headers: authB });
   assert(pageTwo.response.status === 200 && pageTwo.body.items.length === 1 && pageTwo.body.items[0].id === second.body.id, "cursor delta sync failed");
 
+  const fileBytes = new TextEncoder().encode(`pushbridge-local-${suffix}`);
+  const fileHash = createHash("sha256").update(fileBytes).digest("hex");
+  const initialized = await request("/api/v1/files/init", {
+    method: "POST",
+    headers: authA,
+    body: JSON.stringify({ filename: "local-smoke.bin", content_type: "application/octet-stream", size: fileBytes.byteLength, sha256: fileHash, expires_in: 86_400 }),
+  });
+  assert(initialized.response.status === 201, `file init failed: ${JSON.stringify(initialized.body)}`);
+  const upload = await fetch(initialized.body.upload_url, {
+    method: "PUT",
+    headers: initialized.body.upload_headers,
+    body: fileBytes,
+    signal: AbortSignal.timeout(5_000),
+  });
+  assert(upload.status === 200, `file upload failed: ${upload.status}`);
+  const completed = await request(`/api/v1/files/${encodeURIComponent(initialized.body.file.id)}/complete`, { method: "POST", headers: authA });
+  assert(completed.response.status === 200 && completed.body.state === "ready" && completed.body.actual_sha256 === fileHash, "file complete failed");
+  const fileKey = `file-${suffix}`;
+  const filePush = await request("/api/v1/pushes", {
+    method: "POST",
+    headers: { ...authA, "idempotency-key": fileKey },
+    body: JSON.stringify({
+      type: "file",
+      file_id: completed.body.id,
+      target: { kind: "device", device_id: linked.body.device.id },
+      client_guid: fileKey,
+      payload: { file: { name: "local-smoke.bin", size: fileBytes.byteLength } },
+    }),
+  });
+  assert(filePush.response.status === 201 && filePush.body.file_ref?.state === "ready", "file push failed");
+  const fileDelta = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(pageTwo.body.next_cursor)}`, { headers: authB });
+  assert(fileDelta.response.status === 200 && fileDelta.body.items.some((item) => item.id === filePush.body.id), "device B did not cursor-sync the file push");
+  const downloadTicket = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}/download-ticket`, { method: "POST", headers: authB });
+  assert(downloadTicket.response.status === 200, "download ticket failed");
+  const downloaded = await fetch(downloadTicket.body.download_url, { signal: AbortSignal.timeout(5_000) });
+  assert(downloaded.status === 200 && downloaded.headers.get("content-disposition")?.startsWith("attachment"), "file download headers failed");
+  const downloadedBytes = new Uint8Array(await downloaded.arrayBuffer());
+  assert(createHash("sha256").update(downloadedBytes).digest("hex") === fileHash, "downloaded file bytes differ");
+  const deletedFile = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}`, { method: "DELETE", headers: authA });
+  assert(deletedFile.response.status === 200 && deletedFile.body.state === "deleted", "file delete failed");
+  assert((await fetch(downloadTicket.body.download_url)).status === 410, "deleted file download did not return 410");
+
   const root = await request("/");
   assert(root.response.status === 200 && String(root.body).includes('id="root"'), "PWA root asset was not served");
   const spa = await request("/settings/offline-check");
@@ -146,7 +191,7 @@ try {
   const sw = await request("/sw.js");
   assert(sw.response.status === 200 && String(sw.body).includes("CACHE_NAME"), "Service Worker asset was not served");
 
-  console.log("Cloudflare local smoke passed: D1 migrations, Worker API, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker.");
+  console.log("Cloudflare local smoke passed: D1 migrations, private R2 File API, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker.");
 } catch (error) {
   console.error(logs);
   throw error;

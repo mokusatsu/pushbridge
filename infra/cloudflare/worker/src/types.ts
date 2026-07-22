@@ -56,4 +56,33 @@ export interface PushRow {
   expired_at: number | null;
   dismissed_at: number | null;
   deleted_at: number | null;
+  file_ref_state?: string | null;
+  file_ref_size?: number | null;
+  file_ref_expires_at?: number | null;
+  file_ref_deleted_at?: number | null;
+  file_ref_delete_reason?: string | null;
+  file_ref_alias_expires_at?: number | null;
+}
+
+export interface FileRow {
+  id: string;
+  user_id: string;
+  r2_key: string;
+  original_name: string;
+  content_type: string;
+  expected_size: number;
+  actual_size: number | null;
+  expected_sha256: string | null;
+  actual_sha256: string | null;
+  state: "pending" | "uploaded" | "ready" | "delete_pending" | "expired" | "deleted";
+  created_at: number;
+  completed_at: number | null;
+  expires_at: number;
+  deleted_at: number | null;
+  delete_reason: "retention_expired" | "storage_pressure" | "user_deleted" | null;
+  alias_expires_at: number;
+  upload_reservation_expires_at: number | null;
+  r2_delete_attempts: number;
+  r2_delete_retry_at: number | null;
+  r2_delete_error_code: string | null;
 }

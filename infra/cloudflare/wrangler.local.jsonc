@@ -9,7 +9,8 @@
     "run_worker_first": [
       "/health",
       "/healthz",
-      "/api/*"
+      "/api/*",
+      "/mock-storage/*"
     ]
   },
   "d1_databases": [

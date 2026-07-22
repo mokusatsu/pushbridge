@@ -15,16 +15,16 @@
 |---|---|
 | RP-001 モノレポ／共通check | 部分完了。React PWA、RelayMock、Cloudflare IaCを単一workspaceで検証可能 |
 | RP-002 Worker TypeScript化 | PoC完了。route／auth／response等を`worker/src`へ分割し、Terraform投入用bundleを再現可能に生成 |
-| RP-003 Cloudflare統合test | PoC完了。公式Workers Vitest poolでD1 migration、R2、DO、主要routeを9件検証 |
+| RP-003 Cloudflare統合test | PoC完了。公式Workers Vitest poolでD1 migration、R2、DO、主要routeを13件検証 |
 | RP-201 Push作成と冪等性 | PoC完了。cross-user target拒否、UTF-8 byte上限、同一key 100回再送を統合test済み |
 | RP-202 cursor同期 | PoC完了。user／device／sessionに束縛した署名cursor、改変拒否、205件paginationを統合test済み |
 | RP-203 dismiss／pin／delete | PoC実装済み。保持期限cleanupは不足 |
 | RP-204 Link | PoC実装済み。安全なscheme検証を再確認する必要あり |
 | RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
-| RP-601〜605 Worker File／R2 | RelayMockのみ実装済み。Cloudflare Worker側は未実装 |
+| RP-601〜605 Worker File／R2 | Phase 2 PoC実装済み。private R2 server-ticket、File Push、25 MiB境界、削除／410を統合test。presigned URL、暗号化、定期cleanupは未実装 |
 | RP-502〜503 Web Push | RelayMock subscriptionのみ。Worker配送とcached ACKは未実装 |
 
-Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bundle、PWA、Accessを適用済み。現在の優先順はFile API＋R2縦切り、Web Push配送確認、保持期限cleanupである。
+Cloudflare devではTerraform、D1 migration 0001〜0004、TypeScript Worker bundle、PWA、Accessを適用済み。Service Auth経由のFile remote smokeも合格した。現在の優先順はWeb Push配送確認、端末別cached ACK、保持期限cleanupである。
 
 ## Epic E0 — リポジトリと開発基盤
 
@@ -425,6 +425,8 @@ Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bun
 
 ### RP-601 [P1/M] R2 signing credential運用
 
+状態: server-ticket PoCではWorker bindingだけを使用し、資格情報をクライアントへ渡さない。専用最小権限credential、presigned URL、rotation runbookは未完了。
+
 成果:
 
 - dedicated minimal R2 API token作成手順
@@ -436,6 +438,8 @@ Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bun
 - credentialがTerraform/Git/logへ漏れない構成
 
 ### RP-602 [P1/L] File init/direct upload/complete
+
+状態: `init`／PUT ticket／`complete`、固定TTL、Worker生成prefix、size/hash/存在検査を実装済み。dev PoCはWorker body中継のserver-ticketであり、direct upload完成とは扱わない。
 
 依存: RP-103, RP-104, RP-601
 
@@ -454,6 +458,8 @@ Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bun
 
 ### RP-603 [P1/L] Client file encryption
 
+状態: 未実装。Phase 2の実R2検査にはローカルで暗号化したfixtureだけを使用し、製品E2EE完成とは扱わない。
+
 依存: RP-401, RP-602
 
 成果:
@@ -470,6 +476,8 @@ Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bun
 
 ### RP-604 [P1/M] Download ticket/expiry/delete
 
+状態: 短寿命download ticket、利用者境界、attachment配信、期限切れ410、論理削除を実装済み。定期retry処理はRP-605へ残る。
+
 依存: RP-602, RP-603
 
 完了条件:
@@ -480,6 +488,8 @@ Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bun
 - R2 delete retry
 
 ### RP-605 [P2/M] Cleanup job強化
+
+状態: upload reservation時のstale pending回収とR2 delete retry状態のスキーマを実装済み。Cron cleanup、容量逼迫、alias/tombstone完全回収は未実装。
 
 依存: RP-602
 

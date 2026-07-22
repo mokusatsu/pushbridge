@@ -12,3 +12,5 @@ env.txt
 .wrangler/
 infra/cloudflare/infra/backend-r2.hcl
 infra/cloudflare/infra/backend.tf
+infra/cloudflare/infra/*.auto.tfvars
+infra/cloudflare/infra/.runtime-*.tfplan

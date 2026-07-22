@@ -8,16 +8,30 @@ resource "cloudflare_zero_trust_access_application" "app" {
   session_duration     = "24h"
   app_launcher_visible = false
 
-  policies = [{
-    name       = "Allow configured source IPs"
-    decision   = "allow"
-    precedence = 1
-    include = [
-      for cidr in sort(tolist(var.access_ip_allowlist.cidrs)) : {
-        ip = {
-          ip = cidr
+  policies = concat(
+    [{
+      name       = "Allow configured source IPs"
+      decision   = "allow"
+      precedence = 1
+      include = [
+        for cidr in sort(tolist(var.access_ip_allowlist.cidrs)) : {
+          ip = {
+            ip = cidr
+          }
         }
-      }
-    ]
-  }]
+      ]
+    }],
+    length(var.access_service_token_ids) == 0 ? [] : [{
+      name       = "Allow configured service tokens"
+      decision   = "non_identity"
+      precedence = 2
+      include = [
+        for token_id in sort(tolist(var.access_service_token_ids)) : {
+          service_token = {
+            token_id = token_id
+          }
+        }
+      ]
+    }],
+  )
 }

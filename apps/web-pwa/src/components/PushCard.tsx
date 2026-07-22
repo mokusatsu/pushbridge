@@ -40,12 +40,12 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
   const archived = expired || serverDeleted;
   const retainedContent = Boolean(push.title || push.body || push.url || push.file);
   const fileState = push.file?.state;
-  const fileExpired = expired || fileState === 'expired' || fileState === 'deleted'
+  const fileExpired = expired || fileState === 'expired' || fileState === 'delete_pending' || fileState === 'deleted'
     || Boolean(push.file?.expires_at && new Date(push.file.expires_at).getTime() <= Date.now());
   const fileReady = push.local_file_cached || (!fileExpired && (fileState === undefined || fileState === 'ready'));
   const fileMissed = push.type === 'file' && !push.local_file_cached
     && push.is_for_current_device !== false
-    && (push.local_file_delivery === 'missed' || fileState === 'expired' || fileState === 'deleted');
+    && (push.local_file_delivery === 'missed' || fileState === 'expired' || fileState === 'delete_pending' || fileState === 'deleted');
   const fileActionLabel = push.local_file_cached ? '端末から保存' : fileExpired
     ? fileState === 'deleted' ? '削除済み' : '期限切れ'
     : fileReady ? '保存' : '準備中';

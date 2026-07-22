@@ -1,6 +1,6 @@
 import { authenticate, bootstrap } from "./auth";
 import { currentDevice, linkDevice, listDevices, mutateDevice } from "./devices";
-import { handleFileRoute, storageUsage } from "./files";
+import { handleFileRoute, handlePublicFileRoute, storageUsage } from "./files";
 import { createPush, getPush, listPushes, mutatePush } from "./pushes";
 import { getRequestId, json, problem } from "./response";
 import { handleSubscriptionRoute, webPushConfig } from "./subscriptions";
@@ -31,6 +31,8 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       }
 
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
+      const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
+      if (publicFileResponse) return publicFileResponse;
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
@@ -54,7 +56,7 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       }
 
       if (request.method === "GET" && path === "/v1/storage/usage") return json(await storageUsage(env, auth), { headers: { "x-request-id": requestId } });
-      const fileResponse = await handleFileRoute();
+      const fileResponse = await handleFileRoute(request, env, auth, requestId, path, runtime);
       if (fileResponse) return fileResponse;
       const subscriptionResponse = await handleSubscriptionRoute();
       if (subscriptionResponse) return subscriptionResponse;

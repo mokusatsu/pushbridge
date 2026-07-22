@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link、cursor同期、pin／dismiss／delete、storage usageを実装済みです。File API、Web Push配送、WebSocket realtime、正式認証は未実装で、Capabilitiesも未完成機能を`false`として返します。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usageを実装済みです。Fileは非公開R2 bindingを経由する短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。専用R2資格情報によるpresigned URL、Web Push配送、WebSocket realtime、正式認証は未実装です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 
@@ -22,7 +22,7 @@ Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTe
 ├── infra/                  Terraform
 ├── worker/
 │   ├── index.mjs           安全なブートストラップWorker
-│   └── migrations/         D1 SQL migrations
+│   └── migrations/         D1 SQL migrations（0004はFile API台帳）
 ├── app/
 │   ├── dist/               Workers Static Assets
 │   └── headers.conf        静的配信のセキュリティヘッダー
@@ -76,7 +76,7 @@ npm run cloudflare:remote:smoke
 
 state診断はbackend type、bucket、key、workspace、resource/output名だけを表示し、state本文やsecret値は表示しません。`backend_reachable_state_object_missing`の場合は`terraform apply`へ進まず、Cloudflare実環境との照合とimport計画を先に行ってください。
 
-remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。テスト用Pushと2台目の端末は終了時に片付けますが、bootstrapした識別可能な`smoke_*`ユーザーと端末AはAPI仕様上残ります。
+remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。Cloudflare AccessのService Authを使う場合は`CF-Access-Client-Id`と`CF-Access-Client-Secret`を各HTTPリクエストへ付与する必要があります。テスト用Pushと2台目の端末は終了時に片付けますが、bootstrapした識別可能な`smoke_*`ユーザーと端末AはAPI仕様上残ります。
 
 remote stateが失われた環境の実測結果とimport対応表は、リポジトリルートの`docs/13_CLOUDFLARE_STATE_RECOVERY.md`に記録しています。
 
@@ -119,6 +119,14 @@ access_ip_allowlist = {
 ```
 
 この設定ではCloudflareが観測する接続元IPを継続的に評価します。許可IP以外からはPWA、Service Worker、APIのいずれにも到達できません。制限を無効にする場合は`access_ip_allowlist = null`を明示します。
+
+自動smokeなど非対話クライアントは、Accessアプリを迂回させずService Authポリシーで個別のService Tokenを許可します。DashboardのAction `Allow`ではなく`Service Auth`を使い、TerraformにはClient IDやSecretではなくService TokenのリソースUUIDだけを未追跡`*.auto.tfvars`へ設定します。
+
+```hcl
+access_service_token_ids = ["00000000-0000-0000-0000-000000000000"]
+```
+
+Client IDとClient SecretはTerraformへ渡さず、実行時に`CF-Access-Client-Id`／`CF-Access-Client-Secret`ヘッダーとして送ります。リポジトリのremote smokeには標準環境変数`CF_ACCESS_CLIENT_ID`／`CF_ACCESS_CLIENT_SECRET`で渡せます。
 
 ## 主な変数
 
@@ -215,6 +223,7 @@ Turnstile secretと`worker_secrets`はTerraform Stateへ保存されます。
 ```text
 worker/migrations/0002_add_conversations.sql
 worker/migrations/0003_add_channels.sql
+worker/migrations/0004_file_api.sql
 ```
 
 適用前に一覧を確認できます。

@@ -40,7 +40,7 @@ export function ComposePage() {
   const capabilities = snapshot.capabilities;
   const maxFileBytes = capabilities?.limits.max_file_bytes ?? 25 * 1024 * 1024;
   const maxPushPayloadBytes = capabilities?.limits.max_push_payload_bytes ?? 2_000_000;
-  const directUpload = capabilities?.features.direct_upload ?? true;
+  const fileUpload = capabilities ? capabilities.transports.upload.length > 0 : true;
   const defaultPushTtl = capabilities?.limits.default_push_ttl_seconds ?? 2_592_000;
   const defaultFileTtl = capabilities?.limits.default_file_ttl_seconds ?? 86_400;
 
@@ -88,7 +88,7 @@ export function ComposePage() {
   }, [body, file, title, type, url]);
 
   const chooseType = (next: PushType) => {
-    if (next === 'file' && !directUpload) {
+    if (next === 'file' && !fileUpload) {
       setError('接続先APIはファイルアップロードに対応していません。');
       return;
     }
@@ -99,7 +99,7 @@ export function ComposePage() {
 
   const acceptFile = (candidate?: File) => {
     if (!candidate) return;
-    if (!directUpload) {
+    if (!fileUpload) {
       setError('接続先APIはファイルアップロードに対応していません。');
       return;
     }
@@ -194,7 +194,7 @@ export function ComposePage() {
           <div className="segmented compose-types">
             <button type="button" className={type === 'note' ? 'active' : ''} onClick={() => chooseType('note')}><Icon name="note" size={19} />ノート</button>
             <button type="button" className={type === 'link' ? 'active' : ''} onClick={() => chooseType('link')}><Icon name="link" size={19} />リンク</button>
-            <button type="button" className={type === 'file' ? 'active' : ''} disabled={!directUpload} title={directUpload ? undefined : '接続先APIが非対応'} onClick={() => chooseType('file')}><Icon name="file" size={19} />ファイル</button>
+            <button type="button" className={type === 'file' ? 'active' : ''} disabled={!fileUpload} title={fileUpload ? undefined : '接続先APIが非対応'} onClick={() => chooseType('file')}><Icon name="file" size={19} />ファイル</button>
           </div>
         </div>
 

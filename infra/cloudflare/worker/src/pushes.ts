@@ -4,6 +4,15 @@ import { iso } from "./runtime";
 import type { AuthContext, Env, PushRow, Runtime } from "./types";
 
 const encoder = new TextEncoder();
+const PUSH_SELECT = `SELECT
+  p.*,
+  f.state AS file_ref_state,
+  COALESCE(f.actual_size, f.expected_size) AS file_ref_size,
+  f.expires_at AS file_ref_expires_at,
+  f.deleted_at AS file_ref_deleted_at,
+  f.delete_reason AS file_ref_delete_reason,
+  f.alias_expires_at AS file_ref_alias_expires_at
+  FROM pushes p LEFT JOIN files f ON f.id = p.file_id`;
 
 export function pushOut(row: PushRow, currentDeviceId: string): Record<string, unknown> {
   const targetKind = row.target_kind ?? (row.target_device_id ? "device" : "all_other_devices");
@@ -14,7 +23,15 @@ export function pushOut(row: PushRow, currentDeviceId: string): Record<string, u
     target: { kind: targetKind, device_id: targetKind === "device" ? row.target_device_id : null },
     type: row.type,
     file_id: row.file_id ?? null,
-    file_ref: null,
+    file_ref: row.file_id && row.file_ref_state ? {
+      id: row.file_id,
+      state: row.file_ref_state,
+      size: row.file_ref_size == null ? null : Number(row.file_ref_size),
+      expires_at: iso(row.file_ref_expires_at),
+      deleted_at: iso(row.file_ref_deleted_at),
+      delete_reason: row.file_ref_delete_reason ?? null,
+      alias_expires_at: iso(row.file_ref_alias_expires_at),
+    } : null,
     payload_version: row.payload_version ?? 1,
     payload: row.payload_json ? JSON.parse(row.payload_json) : {},
     ciphertext: null,
@@ -34,17 +51,18 @@ export function pushOut(row: PushRow, currentDeviceId: string): Record<string, u
   };
 }
 
-function payloadEquals(row: PushRow, type: string, targetKind: string, targetDeviceId: string | null, payloadJson: string): boolean {
+function payloadEquals(row: PushRow, type: string, targetKind: string, targetDeviceId: string | null, fileId: string | null, payloadJson: string): boolean {
   return row.type === type
     && row.target_kind === targetKind
     && (row.target_device_id ?? null) === targetDeviceId
+    && (row.file_id ?? null) === fileId
     && (row.payload_json ?? "{}") === payloadJson;
 }
 
 export async function createPush(request: Request, env: Env, auth: AuthContext, requestId: string, runtime: Runtime): Promise<Response> {
   const body = await bodyJson(request, requestId);
   const type = typeof body.type === "string" ? body.type : "";
-  if (!["note", "link"].includes(type)) return problem(422, "unsupported_push_type", "The Worker currently accepts note and link pushes.", requestId);
+  if (!["note", "link", "file"].includes(type)) return problem(422, "unsupported_push_type", "Push type must be note, link, or file.", requestId);
   const idempotencyKey = request.headers.get("idempotency-key");
   if (idempotencyKey && idempotencyKey.length > 200) return problem(422, "invalid_idempotency_key", "Idempotency-Key must be 200 characters or fewer.", requestId);
   if (idempotencyKey && typeof body.client_guid === "string" && idempotencyKey !== body.client_guid) {
@@ -58,6 +76,8 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
     const url = (payload as Record<string, unknown>).url;
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return problem(422, "invalid_link", "Link URLs must use http or https.", requestId);
   }
+  const fileId = type === "file" && typeof body.file_id === "string" ? body.file_id : null;
+  if (type === "file" && !fileId) return problem(422, "file_id_required", "A file push requires file_id.", requestId);
 
   const target = body.target && typeof body.target === "object" && !Array.isArray(body.target) ? body.target as Record<string, unknown> : { kind: "all_other_devices" };
   const targetKind = typeof target.kind === "string" ? target.kind : "all_other_devices";
@@ -70,30 +90,39 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
     if (!targetDevice) return problem(422, "invalid_target", "The target device is unavailable.", requestId);
   }
 
-  const replay = await env.DB.prepare("SELECT * FROM pushes WHERE user_id = ? AND client_guid = ?").bind(auth.user_id, clientGuid).first<PushRow>();
+  const replay = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first<PushRow>();
   if (replay) {
-    if (!payloadEquals(replay, type, targetKind, targetDeviceId, payloadJson)) {
+    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
     return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
 
+  let fileAliasExpiresAt: number | null = null;
+  if (fileId) {
+    const file = await env.DB.prepare("SELECT state, expires_at, alias_expires_at FROM files WHERE id = ? AND user_id = ?")
+      .bind(fileId, auth.user_id).first<{ state: string; expires_at: number; alias_expires_at: number }>();
+    if (!file) return problem(404, "file_not_found", "The referenced file does not exist for this account.", requestId);
+    if (file.state !== "ready" || Number(file.expires_at) <= runtime.now()) return problem(409, "file_not_ready", "The referenced file is expired, deleted, or not ready.", requestId);
+    fileAliasExpiresAt = Number(file.alias_expires_at);
+  }
+
   const now = runtime.now();
   const expiresIn = typeof body.expires_in === "number" && Number.isFinite(body.expires_in) ? body.expires_in : 2_592_000;
-  const expiresAt = now + Math.min(Math.max(1, expiresIn), 2_592_000) * 1000;
+  const expiresAt = fileAliasExpiresAt ?? now + Math.min(Math.max(1, expiresIn), 2_592_000) * 1000;
   const pushId = runtime.id("psh");
   try {
     await env.DB.prepare(`INSERT INTO pushes
-      (id, user_id, source_device_id, target_device_id, target_kind, type, payload_version,
+      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version,
        ciphertext, nonce, payload_json, client_guid, created_at, modified_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`)
-      .bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`)
+      .bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, fileId, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
   } catch {
-    const raced = await env.DB.prepare("SELECT * FROM pushes WHERE user_id = ? AND client_guid = ?").bind(auth.user_id, clientGuid).first<PushRow>();
-    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, payloadJson)) throw new Error("push insert failed");
+    const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first<PushRow>();
+    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ?").bind(pushId).first<PushRow>();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first<PushRow>();
   if (!row) throw new Error("created push is missing");
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
@@ -103,11 +132,11 @@ export async function listPushes(url: URL, env: Env, auth: AuthContext, requestI
   const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.floor(requestedLimit) : 100));
   const cursor = await decodeCursor(url.searchParams.get("after"), auth, requestId);
   const includeDeleted = url.searchParams.get("include_deleted") !== "false";
-  const deletedClause = includeDeleted ? "" : " AND deleted_at IS NULL";
+  const deletedClause = includeDeleted ? "" : " AND p.deleted_at IS NULL";
   const result = cursor
-    ? await env.DB.prepare(`SELECT * FROM pushes WHERE user_id = ?${deletedClause} AND (modified_at > ? OR (modified_at = ? AND id > ?)) ORDER BY modified_at, id LIMIT ?`)
+    ? await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ?${deletedClause} AND (p.modified_at > ? OR (p.modified_at = ? AND p.id > ?)) ORDER BY p.modified_at, p.id LIMIT ?`)
       .bind(auth.user_id, cursor.time, cursor.time, cursor.id, limit + 1).all<PushRow>()
-    : await env.DB.prepare(`SELECT * FROM pushes WHERE user_id = ?${deletedClause} ORDER BY modified_at, id LIMIT ?`).bind(auth.user_id, limit + 1).all<PushRow>();
+    : await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ?${deletedClause} ORDER BY p.modified_at, p.id LIMIT ?`).bind(auth.user_id, limit + 1).all<PushRow>();
   const rows = result.results.slice(0, limit);
   const last = rows.at(-1);
   return {
@@ -118,12 +147,12 @@ export async function listPushes(url: URL, env: Env, auth: AuthContext, requestI
 }
 
 export async function getPush(env: Env, auth: AuthContext, requestId: string, pushId: string): Promise<Response> {
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ? AND user_id = ?").bind(pushId, auth.user_id).first<PushRow>();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ? AND p.user_id = ?`).bind(pushId, auth.user_id).first<PushRow>();
   return row ? json(pushOut(row, auth.device_id), { headers: { "x-request-id": requestId } }) : problem(404, "not_found", "Push not found.", requestId);
 }
 
 export async function mutatePush(request: Request, env: Env, auth: AuthContext, requestId: string, pushId: string, runtime: Runtime): Promise<Response> {
-  const row = await env.DB.prepare("SELECT * FROM pushes WHERE id = ? AND user_id = ?").bind(pushId, auth.user_id).first<PushRow>();
+  const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ? AND p.user_id = ?`).bind(pushId, auth.user_id).first<PushRow>();
   if (!row) return problem(404, "not_found", "Push not found.", requestId);
   const modifiedAt = Math.max(runtime.now(), Number(row.modified_at) + 1);
   if (request.method === "DELETE") {
@@ -137,7 +166,7 @@ export async function mutatePush(request: Request, env: Env, auth: AuthContext, 
     await env.DB.prepare("UPDATE pushes SET dismissed_at = ?, pinned_at = ?, modified_at = ?, status = ? WHERE id = ? AND user_id = ?")
       .bind(dismissedAt, pinnedAt, modifiedAt, status, pushId, auth.user_id).run();
   }
-  const updated = await env.DB.prepare("SELECT * FROM pushes WHERE id = ?").bind(pushId).first<PushRow>();
+  const updated = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first<PushRow>();
   if (!updated) throw new Error("updated push is missing");
   return json(pushOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }

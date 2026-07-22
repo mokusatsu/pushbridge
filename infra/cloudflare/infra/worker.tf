@@ -18,7 +18,7 @@ resource "cloudflare_workers_script" "app" {
       headers            = file(local.assets_headers)
       html_handling      = "auto-trailing-slash"
       not_found_handling = "single-page-application"
-      run_worker_first   = ["/api/*", "/auth/*", "/ws/*", "/health", "/healthz"]
+      run_worker_first   = ["/api/*", "/auth/*", "/ws/*", "/mock-storage/*", "/health", "/healthz"]
     }
   }
 

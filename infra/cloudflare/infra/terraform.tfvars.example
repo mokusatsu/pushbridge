@@ -18,6 +18,10 @@ access_ip_allowlist = {
   ]
 }
 
+# Optional automation access. Use the Service Token resource UUID, not its
+# Client ID or Client Secret. Keep real IDs in an ignored *.auto.tfvars file.
+access_service_token_ids = []
+
 # For a production custom domain:
 # custom_domain = {
 #   hostname = "push.example.com"
