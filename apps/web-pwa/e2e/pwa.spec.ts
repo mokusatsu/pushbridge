@@ -67,7 +67,7 @@ async function sendFile(page: Page, name: string, content: string) {
   await page.locator('#file-input').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(content) });
   await page.getByRole('button', { name: '送信する' }).click();
   await page.getByRole('button', { name: /送信済み/ }).click();
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
 
 async function fileIdByName(request: APIRequestContext, token: string, name: string): Promise<string> {
