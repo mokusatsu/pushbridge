@@ -28,6 +28,7 @@ from ..utils import (
     to_iso,
     utc_now,
 )
+from .deliveries import mark_undelivered_missed
 
 router = APIRouter(tags=["files"])
 
@@ -517,6 +518,7 @@ def delete_file(
             conn.execute("DELETE FROM tickets WHERE file_id = ?", (file_id,))
             touch_file_pushes(conn, [file_id], now)
             retain_lightweight_file_aliases(conn, [file_id], now)
+            mark_undelivered_missed(conn, file_id, "user_deleted", now)
             conn.commit()
         updated = conn.execute(
             "SELECT * FROM files WHERE id = ?", (file_id,)

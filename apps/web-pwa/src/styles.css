@@ -168,6 +168,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monos
 .outbox-failed .outbox-icon { color: var(--danger); background: var(--danger-soft); }
 .outbox-body { min-width: 0; }
 .outbox-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.upload-progress-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; margin-top: 8px; color: var(--text-soft); font-size: .72rem; font-weight: 700; }
+.upload-progress-row progress { width: 100%; height: 8px; accent-color: var(--primary); }
+.delivery-statuses { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .outbox-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .error-text { margin: 7px 0 0; color: var(--danger); font-size: .76rem; line-height: 1.45; }
 

@@ -177,6 +177,8 @@ describe('AppDatabase', () => {
         ...readyFilePush,
         file: {
           ...readyFilePush.file!,
+          name: 'ファイル file_cached_after_delete',
+          mime_type: 'application/octet-stream',
           state: 'deleted',
           deleted_at: '2026-01-02T00:00:00Z',
           delete_reason: 'storage_pressure',
@@ -189,7 +191,7 @@ describe('AppDatabase', () => {
     expect(await db.getPush(readyFilePush.id)).toMatchObject({
       local_file_cached: true,
       local_file_delivery: 'cached',
-      file: { state: 'deleted' },
+      file: { state: 'deleted', name: 'cached.bin' },
     });
   });
 

@@ -300,4 +300,29 @@ describe('RelayMock LocalApi adapter', () => {
     expect(init).toMatchObject({ file_id: 'fil_1', upload: { method: 'PUT', url: '/mock-storage/uploads/ticket' } });
     expect(ticket.download.url).toBe('/mock-storage/downloads/ticket');
   });
+
+  it('parses per-device file delivery states from the contract endpoint', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse([{
+      id: 'fdl_1',
+      push_id: 'psh_file',
+      file_id: 'fil_1',
+      destination_device_id: 'dev_other',
+      state: 'fetching',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:01:00Z',
+      notified_at: '2026-01-01T00:00:30Z',
+      fetching_at: '2026-01-01T00:01:00Z',
+      cached_at: null,
+      failed_at: null,
+      missed_at: null,
+      failure_code: null,
+      attempt_count: 1,
+    }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const deliveries = await new LocalApi(new ApiClient(settings)).listFileDeliveries('fil_1');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/files/fil_1/deliveries');
+    expect(deliveries).toEqual([expect.objectContaining({ state: 'fetching', destination_device_id: 'dev_other' })]);
+  });
 });

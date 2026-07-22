@@ -74,6 +74,7 @@ export function TimelinePage() {
                 key={job.id}
                 job={job}
                 onRetry={() => void runtime.retryOutbox(job.id)}
+                onCancel={() => runtime.cancelOutbox(job.id)}
                 onDelete={() => {
                   if (window.confirm('この送信待ち項目を削除しますか？')) void runtime.removeOutbox(job.id);
                 }}

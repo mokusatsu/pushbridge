@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usageを実装済みです。Fileは非公開R2 bindingを経由する短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。専用R2資格情報によるpresigned URL、Web Push配送、WebSocket realtime、正式認証は未実装です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usageを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。Phase 3 sourceではWeb Push subscription暗号化保存、VAPID配送、端末別配送台帳、Service Workerのバックグラウンド保存とACKまで実装済みですが、dev migration／秘密値／実ブラウザー確認前は配送を有効と扱いません。専用R2資格情報によるpresigned URL、WebSocket realtime、正式認証は未実装です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 
@@ -22,7 +22,7 @@ Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTe
 ├── infra/                  Terraform
 ├── worker/
 │   ├── index.mjs           安全なブートストラップWorker
-│   └── migrations/         D1 SQL migrations（0004はFile API台帳）
+│   └── migrations/         D1 SQL migrations（0004 File、0005 Web Push、0006〜0007 retention usage）
 ├── app/
 │   ├── dist/               Workers Static Assets
 │   └── headers.conf        静的配信のセキュリティヘッダー
@@ -192,17 +192,25 @@ Terraformが次を作ります。
 追加値:
 
 ```hcl
-worker_plain_text_vars = {
-  MAX_FILE_BYTES = "26214400"
-}
-
-worker_secrets = {
-  SESSION_SIGNING_KEY = "..."
-  VAPID_PRIVATE_KEY   = "..."
-}
+vapid_public_key  = "<base64url uncompressed P-256 public key>"
+vapid_private_key = "<base64url 32-byte P-256 private key>"
+vapid_subject     = "https://pushbridge-dev.example.workers.dev"
+web_push_data_key = "<base64url 32-byte AES data key>"
 ```
 
-予約済みのplain-text名はTerraformの値が優先されます。
+`VAPID_SUBJECT`は`mailto:`またはHTTPS URIにします。秘密値は未追跡`terraform.tfvars`から渡し、Planやログへ展開しません。予約済みのplain-text名はTerraformの値が優先されます。
+
+dev専用鍵をまだ作成していない場合、Windows／Linux共通で次を実行すると、4変数を値を表示せず無視対象のリポジトリ直下`env.txt`へ追記します。既存の同名変数が1件でもあれば上書きせず失敗します。
+
+```bash
+npm run cloudflare:web-push:generate -- --subject=https://pushbridge-dev.example.workers.dev
+```
+
+4変数を`env.txt`へ保存した後、次を実行すると値を表示せず無視対象`infra/cloudflare/infra/web-push.auto.tfvars`を生成します。
+
+```bash
+npm run cloudflare:web-push:render
+```
 
 ## Terraform Stateの保護
 
@@ -224,6 +232,9 @@ Turnstile secretと`worker_secrets`はTerraform Stateへ保存されます。
 worker/migrations/0002_add_conversations.sql
 worker/migrations/0003_add_channels.sql
 worker/migrations/0004_file_api.sql
+worker/migrations/0005_web_push_subscriptions.sql
+worker/migrations/0006_retention_cleanup.sql
+worker/migrations/0007_storage_usage_units.sql
 ```
 
 適用前に一覧を確認できます。

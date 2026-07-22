@@ -108,6 +108,31 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_device
     ON web_push_subscriptions(device_id, revoked_at);
+
+CREATE TABLE IF NOT EXISTS file_deliveries (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    push_id TEXT NOT NULL REFERENCES pushes(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    destination_device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    ack_token_hash TEXT UNIQUE,
+    ack_token_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    notified_at TEXT,
+    fetching_at TEXT,
+    cached_at TEXT,
+    failed_at TEXT,
+    missed_at TEXT,
+    failure_code TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(file_id, destination_device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_file_deliveries_push
+    ON file_deliveries(push_id, state);
+CREATE INDEX IF NOT EXISTS idx_file_deliveries_device
+    ON file_deliveries(destination_device_id, state);
 """
 
 
@@ -155,6 +180,7 @@ class Database:
             conn.executescript(
                 """
                 DELETE FROM web_push_subscriptions;
+                DELETE FROM file_deliveries;
                 DELETE FROM tickets;
                 DELETE FROM pushes;
                 DELETE FROM files;

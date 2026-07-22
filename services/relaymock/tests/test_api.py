@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 from fastapi.testclient import TestClient
+from relaymock.routers.deliveries import issue_delivery_token
 
 
 def test_health(client: TestClient) -> None:
@@ -212,12 +213,19 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
     assert completed.status_code == 200
     assert completed.json()["state"] == "ready"
 
+    linked = client.post(
+        "/v1/devices/link",
+        headers=auth_headers,
+        json={"name": "File receiver", "kind": "pwa"},
+    ).json()
+
     file_push = client.post(
         "/v1/pushes",
         headers={**auth_headers, "Idempotency-Key": "encrypted-file-push"},
         json={
             "type": "file",
             "file_id": file_id,
+            "target": {"kind": "device", "device_id": linked["device"]["id"]},
             "ciphertext": "base64url-ciphertext",
             "nonce": "base64url-nonce",
         },
@@ -226,6 +234,53 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
     assert file_push.json()["file_id"] == file_id
     assert file_push.json()["payload"] is None
 
+    with client.app.state.database.connection() as conn:
+        delivery = conn.execute(
+            "SELECT * FROM file_deliveries WHERE file_id = ? AND destination_device_id = ?",
+            (file_id, linked["device"]["id"]),
+        ).fetchone()
+        assert delivery["state"] == "pending"
+        assert issue_delivery_token(conn, delivery["id"], "delivery-test-token")
+        conn.commit()
+
+    wrong_ack = client.post(
+        f"/v1/file-deliveries/{delivery['id']}/events",
+        headers={"Authorization": "Bearer wrong"},
+        json={"state": "cached"},
+    )
+    assert wrong_ack.status_code == 403
+    fetching = client.post(
+        f"/v1/file-deliveries/{delivery['id']}/events",
+        headers={"Authorization": "Bearer delivery-test-token"},
+        json={"state": "fetching"},
+    )
+    assert fetching.status_code == 200
+    cached = client.post(
+        f"/v1/file-deliveries/{delivery['id']}/events",
+        headers={"Authorization": "Bearer delivery-test-token"},
+        json={"state": "cached"},
+    )
+    assert cached.status_code == 200
+    assert cached.json()["state"] == "cached"
+
+    third = client.post(
+        "/v1/devices/link",
+        headers=auth_headers,
+        json={"name": "Missed receiver", "kind": "pwa"},
+    ).json()
+    missed_push = client.post(
+        "/v1/pushes",
+        headers={**auth_headers, "Idempotency-Key": "missed-file-push"},
+        json={
+            "type": "file",
+            "file_id": file_id,
+            "target": {"kind": "device", "device_id": third["device"]["id"]},
+            "ciphertext": "base64url-ciphertext-2",
+            "nonce": "base64url-nonce-2",
+        },
+    )
+    assert missed_push.status_code == 201
+
     ticket = client.post(
         f"/v1/files/{file_id}/download-ticket", headers=auth_headers
     )
@@ -233,6 +288,15 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
     downloaded = client.get(ticket.json()["download_url"])
     assert downloaded.status_code == 200
     assert downloaded.content == content
+
+    deleted = client.delete(f"/v1/files/{file_id}", headers=auth_headers)
+    assert deleted.status_code == 200
+    deliveries = client.get(
+        f"/v1/files/{file_id}/deliveries", headers=auth_headers
+    ).json()
+    states = {item["destination_device_id"]: item["state"] for item in deliveries}
+    assert states[linked["device"]["id"]] == "cached"
+    assert states[third["device"]["id"]] == "missed"
 
 
 def test_upload_reservations_reject_capacity_overflow(

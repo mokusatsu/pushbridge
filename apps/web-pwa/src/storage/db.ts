@@ -162,7 +162,13 @@ export class AppDatabase {
             title: incoming.title ?? existing.title,
             body: incoming.body ?? existing.body,
             url: incoming.url ?? existing.url,
-            file: incoming.file ?? existing.file,
+            file: cached && incoming.file ? {
+              ...incoming.file,
+              name: cached.name,
+              mime_type: cached.mime_type,
+              size: cached.size,
+            } : incoming.file ?? existing.file,
+            file_deliveries: incoming.file_deliveries ?? existing.file_deliveries,
             local_file_cached: Boolean(existing.local_file_cached || cached),
             local_file_delivery: existing.local_file_cached || cached
               ? 'cached'
@@ -174,6 +180,12 @@ export class AppDatabase {
               : existing.local_archived_at,
           } : {
             ...incoming,
+            file: cached && incoming.file ? {
+              ...incoming.file,
+              name: cached.name,
+              mime_type: cached.mime_type,
+              size: cached.size,
+            } : incoming.file,
             local_file_cached: Boolean(cached),
             local_file_delivery: cached
               ? 'cached'

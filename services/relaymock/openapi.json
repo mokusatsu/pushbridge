@@ -1259,6 +1259,123 @@
         }
       }
     },
+    "/v1/files/{file_id}/deliveries": {
+      "get": {
+        "tags": [
+          "file deliveries"
+        ],
+        "summary": "List File Delivery States",
+        "operationId": "list_file_deliveries_v1_files__file_id__deliveries_get",
+        "security": [
+          {
+            "DeviceBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-destination delivery states.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FileDeliveryOut"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/v1/file-deliveries/{delivery_id}/events": {
+      "post": {
+        "tags": [
+          "file deliveries"
+        ],
+        "summary": "Acknowledge File Delivery Progress",
+        "description": "A Service Worker uses the short-lived delivery token from a Web Push payload. A cached acknowledgement is valid only after its IndexedDB transaction commits.",
+        "operationId": "ack_file_delivery_v1_file_deliveries__delivery_id__events_post",
+        "security": [
+          {
+            "DeliveryBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "delivery_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileDeliveryEventIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery state updated or idempotently replayed.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDeliveryOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "410": {
+            "$ref": "#/components/responses/Gone"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
     "/mock-storage/downloads/{ticket}": {
       "get": {
         "tags": [
@@ -2450,6 +2567,128 @@
           "deleted_at"
         ],
         "title": "FileOut"
+      },
+      "FileDeliveryEventIn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "fetching",
+              "cached",
+              "failed_retryable"
+            ]
+          },
+          "failure_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 100
+          }
+        }
+      },
+      "FileDeliveryOut": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "push_id",
+          "file_id",
+          "destination_device_id",
+          "state",
+          "created_at",
+          "updated_at",
+          "notified_at",
+          "fetching_at",
+          "cached_at",
+          "failed_at",
+          "missed_at",
+          "failure_code",
+          "attempt_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "push_id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "destination_device_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "notified",
+              "fetching",
+              "cached",
+              "failed_retryable",
+              "missed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "notified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "fetching_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "cached_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "missed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failure_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "FilePayloadV1": {
         "properties": {
@@ -3716,6 +3955,11 @@
       "DeviceBearer": {
         "type": "http",
         "scheme": "bearer"
+      },
+      "DeliveryBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Short-lived token scoped to one file delivery ledger row."
       }
     },
     "headers": {

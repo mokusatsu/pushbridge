@@ -1,20 +1,3 @@
-// infra/cloudflare/worker/src/cleanup.ts
-async function cleanupExpiredMetadata(env, runtime) {
-  const now = runtime.now();
-  const statements = [
-    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL").bind(now),
-    env.DB.prepare("DELETE FROM bootstrap_rate_limits WHERE window_started_at < ?").bind(now - 24 * 60 * 60 * 1e3),
-    env.DB.prepare("UPDATE files SET state = 'expired' WHERE expires_at <= ? AND state = 'ready'").bind(now)
-  ];
-  for (const statement of statements) {
-    try {
-      await statement.run();
-    } catch (error) {
-      console.warn("cleanup statement failed", { error: error instanceof Error ? error.name : "unknown" });
-    }
-  }
-}
-
 // infra/cloudflare/worker/src/crypto.ts
 async function sha256Hex(value) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -32,6 +15,11 @@ function base64UrlDecode(value) {
   const raw = atob(padded);
   return Uint8Array.from(raw, (character) => character.charCodeAt(0));
 }
+function ownedBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
 async function hmac(key, value) {
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
@@ -41,6 +29,28 @@ async function hmac(key, value) {
     ["sign"]
   );
   return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value)));
+}
+async function aesKey(encodedKey, usages) {
+  const raw = base64UrlDecode(encodedKey);
+  if (raw.byteLength !== 32) throw new Error("WEB_PUSH_DATA_KEY must be a 32-byte base64url value");
+  return crypto.subtle.importKey("raw", ownedBuffer(raw), { name: "AES-GCM" }, false, usages);
+}
+async function encryptText(value, encodedKey, aad2) {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(aad2) },
+    await aesKey(encodedKey, ["encrypt"]),
+    new TextEncoder().encode(value)
+  );
+  return { ciphertext: base64UrlEncode(new Uint8Array(ciphertext)), nonce: base64UrlEncode(nonce) };
+}
+async function decryptText(ciphertext, nonce, encodedKey, aad2) {
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: ownedBuffer(base64UrlDecode(nonce)), additionalData: new TextEncoder().encode(aad2) },
+    await aesKey(encodedKey, ["decrypt"]),
+    ownedBuffer(base64UrlDecode(ciphertext))
+  );
+  return new TextDecoder().decode(plaintext);
 }
 
 // infra/cloudflare/worker/src/response.ts
@@ -87,6 +97,373 @@ function createRuntime(overrides = {}) {
 }
 function iso(epoch) {
   return epoch == null ? null : new Date(Number(epoch)).toISOString();
+}
+
+// infra/cloudflare/worker/src/deliveries.ts
+var ACK_TOKEN_TTL_MS = 24 * 60 * 60 * 1e3;
+function deliveryOut(row) {
+  return {
+    id: row.id,
+    push_id: row.push_id,
+    file_id: row.file_id,
+    destination_device_id: row.destination_device_id,
+    state: row.state,
+    created_at: iso(row.created_at),
+    updated_at: iso(row.updated_at),
+    notified_at: iso(row.notified_at),
+    fetching_at: iso(row.fetching_at),
+    cached_at: iso(row.cached_at),
+    failed_at: iso(row.failed_at),
+    missed_at: iso(row.missed_at),
+    failure_code: row.failure_code,
+    attempt_count: Number(row.attempt_count)
+  };
+}
+async function ensureFileDeliveries(env, push, runtime) {
+  if (push.type !== "file" || !push.file_id) return;
+  const targetKind = push.target_kind ?? (push.target_device_id ? "device" : "all_other_devices");
+  let devices;
+  if (targetKind === "device") {
+    devices = await env.DB.prepare("SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(push.target_device_id, push.user_id).all();
+  } else if (targetKind === "all_devices") {
+    devices = await env.DB.prepare("SELECT id FROM devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY id").bind(push.user_id).all();
+  } else {
+    devices = await env.DB.prepare("SELECT id FROM devices WHERE user_id = ? AND id != ? AND revoked_at IS NULL ORDER BY id").bind(push.user_id, push.source_device_id).all();
+  }
+  const now = runtime.now();
+  if (devices.results.length === 0) return;
+  await env.DB.batch(devices.results.map((device) => env.DB.prepare(`INSERT OR IGNORE INTO file_deliveries
+    (id, user_id, push_id, file_id, destination_device_id, state, created_at, updated_at, attempt_count)
+    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 0)`).bind(runtime.id("fdl"), push.user_id, push.id, push.file_id, device.id, now, now)));
+}
+async function issueDeliveryToken(env, deliveryId, runtime) {
+  const token = runtime.token();
+  const expiresAt = runtime.now() + ACK_TOKEN_TTL_MS;
+  const result = await env.DB.prepare(`UPDATE file_deliveries SET ack_token_hash = ?, ack_token_expires_at = ?,
+    updated_at = ?, attempt_count = attempt_count + 1
+    WHERE id = ? AND state IN ('pending', 'notified', 'failed_retryable')`).bind(await sha256Hex(token), expiresAt, runtime.now(), deliveryId).run();
+  return result.meta.changes === 1 ? { token, expiresAt } : null;
+}
+async function markDeliveryNotified(env, deliveryId, runtime) {
+  const now = runtime.now();
+  await env.DB.prepare(`UPDATE file_deliveries SET state = 'notified', notified_at = COALESCE(notified_at, ?),
+    updated_at = ?, failure_code = NULL WHERE id = ? AND state IN ('pending', 'notified', 'failed_retryable')`).bind(now, now, deliveryId).run();
+}
+async function markDeliveryFailed(env, deliveryId, failureCode, runtime) {
+  const now = runtime.now();
+  await env.DB.prepare(`UPDATE file_deliveries SET state = 'failed_retryable', failed_at = ?, updated_at = ?,
+    failure_code = ? WHERE id = ? AND state IN ('pending', 'notified', 'failed_retryable')`).bind(now, now, failureCode.slice(0, 100), deliveryId).run();
+}
+async function listFileDeliveries(env, auth, requestId, fileId) {
+  const owned = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND user_id = ?").bind(fileId, auth.user_id).first();
+  if (!owned) return problem(404, "file_not_found", "File not found.", requestId);
+  const rows = await env.DB.prepare(`SELECT * FROM file_deliveries WHERE file_id = ? AND user_id = ?
+    ORDER BY destination_device_id, id`).bind(fileId, auth.user_id).all();
+  return json(rows.results.map(deliveryOut), { headers: { "x-request-id": requestId } });
+}
+async function handlePublicDeliveryRoute(request, env, requestId, path, runtime) {
+  const match = path.match(/^\/v1\/file-deliveries\/([^/]+)\/events$/);
+  if (!match || request.method !== "POST") return null;
+  const tokenHeader = request.headers.get("authorization") ?? "";
+  const token = tokenHeader.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token) return problem(401, "delivery_token_required", "A delivery acknowledgement token is required.", requestId);
+  const row = await env.DB.prepare("SELECT * FROM file_deliveries WHERE id = ? AND ack_token_hash = ?").bind(decodeURIComponent(match[1]), await sha256Hex(token)).first();
+  if (!row) return problem(403, "invalid_delivery_token", "The delivery acknowledgement token is invalid.", requestId);
+  if (row.ack_token_expires_at == null || row.ack_token_expires_at <= runtime.now()) {
+    return problem(410, "delivery_token_expired", "The delivery acknowledgement token has expired.", requestId);
+  }
+  const body = await bodyJson(request, requestId);
+  const next = typeof body.state === "string" ? body.state : "";
+  if (!["fetching", "cached", "failed_retryable"].includes(next)) {
+    return problem(422, "invalid_delivery_state", "state must be fetching, cached, or failed_retryable.", requestId);
+  }
+  if (row.state === "cached") return json(deliveryOut(row), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
+  if (row.state === "missed") return problem(409, "delivery_missed", "A missed delivery cannot be acknowledged.", requestId);
+  const now = runtime.now();
+  const failureCode = next === "failed_retryable" && typeof body.failure_code === "string" ? body.failure_code.slice(0, 100) : null;
+  await env.DB.prepare(`UPDATE file_deliveries SET state = ?, updated_at = ?,
+    fetching_at = CASE WHEN ? = 'fetching' THEN COALESCE(fetching_at, ?) ELSE fetching_at END,
+    cached_at = CASE WHEN ? = 'cached' THEN COALESCE(cached_at, ?) ELSE cached_at END,
+    failed_at = CASE WHEN ? = 'failed_retryable' THEN ? ELSE failed_at END,
+    failure_code = CASE WHEN ? = 'failed_retryable' THEN ? WHEN ? = 'cached' THEN NULL ELSE failure_code END
+    WHERE id = ?`).bind(next, now, next, now, next, now, next, now, next, failureCode, next, row.id).run();
+  const updated = await env.DB.prepare("SELECT * FROM file_deliveries WHERE id = ?").bind(row.id).first();
+  if (!updated) throw new Error("updated delivery is missing");
+  return json(deliveryOut(updated), { headers: { "x-request-id": requestId } });
+}
+async function markUndeliveredMissed(env, fileId, reason, runtime) {
+  const now = runtime.now();
+  await env.DB.prepare(`UPDATE file_deliveries SET state = 'missed', updated_at = ?, missed_at = ?, failure_code = ?
+    WHERE file_id = ? AND state != 'cached'`).bind(now, now, reason, fileId).run();
+}
+
+// infra/cloudflare/worker/src/cleanup.ts
+var DAY_MS = 24 * 60 * 60 * 1e3;
+var TOMBSTONE_TTL_MS = 7 * DAY_MS;
+var TICKET_RECORD_TTL_MS = DAY_MS;
+var DEFAULT_STORAGE_BUDGET_BYTES = 8 * 1024 * 1024 * 1024;
+var DEFAULT_HIGH_WATERMARK_PERCENT = 95;
+var DEFAULT_CLEANUP_TARGET_PERCENT = 85;
+var MAX_DELETE_RETRY_MS = 60 * 60 * 1e3;
+function integerSetting(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+function storagePolicy(env) {
+  const monthly = Number(env.STORAGE_MONTHLY_BYTE_DAY_BUDGET);
+  const highWatermarkPercent = integerSetting(env.STORAGE_PRESSURE_HIGH_PERCENT, DEFAULT_HIGH_WATERMARK_PERCENT, 1, 100);
+  const requestedTarget = integerSetting(env.STORAGE_CLEANUP_TARGET_PERCENT, DEFAULT_CLEANUP_TARGET_PERCENT, 1, 100);
+  return {
+    budgetBytes: integerSetting(env.STORAGE_BUDGET_BYTES, DEFAULT_STORAGE_BUDGET_BYTES, 1, Number.MAX_SAFE_INTEGER),
+    highWatermarkPercent,
+    cleanupTargetPercent: Math.min(requestedTarget, Math.max(0, highWatermarkPercent - 1)),
+    monthlyByteDayBudget: Number.isSafeInteger(monthly) && monthly > 0 ? monthly : null
+  };
+}
+async function storageTotals(env) {
+  const row = await env.DB.prepare(`SELECT
+    COALESCE(SUM(CASE WHEN state IN ('ready', 'delete_pending') THEN COALESCE(actual_size, expected_size) ELSE 0 END), 0) AS used_bytes,
+    COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
+    FROM files`).first();
+  const usedBytes = Number(row?.used_bytes ?? 0);
+  const reservedBytes = Number(row?.reserved_bytes ?? 0);
+  return { usedBytes, reservedBytes, totalBytes: usedBytes + reservedBytes };
+}
+function utcDay(epoch) {
+  return new Date(epoch).toISOString().slice(0, 10);
+}
+function dayStart(day) {
+  return Date.parse(`${day}T00:00:00.000Z`);
+}
+async function recordUsageSample(env, now, bytes) {
+  const today = utcDay(now);
+  const latest = await env.DB.prepare("SELECT * FROM storage_usage_daily ORDER BY day DESC LIMIT 1").first();
+  if (!latest) {
+    await env.DB.prepare(`INSERT INTO storage_usage_daily
+      (day, peak_bytes, kibibyte_seconds, last_sample_at, last_bytes, updated_at)
+      VALUES (?, ?, 0, ?, ?, ?)`).bind(today, bytes, now, bytes, now).run();
+    return;
+  }
+  const latestEnd = dayStart(latest.day) + DAY_MS;
+  const elapsed = Math.max(0, Math.min(now, latestEnd) - Number(latest.last_sample_at));
+  const elapsedSeconds = Math.floor(elapsed / 1e3);
+  const lastKibibytes = Math.ceil(Number(latest.last_bytes) / 1024);
+  await env.DB.prepare(`UPDATE storage_usage_daily SET
+    peak_bytes = MAX(peak_bytes, ?), kibibyte_seconds = kibibyte_seconds + ?,
+    last_sample_at = ?, last_bytes = ?, updated_at = ? WHERE day = ?`).bind(
+    latest.day === today ? bytes : latest.last_bytes,
+    elapsedSeconds * lastKibibytes,
+    Math.min(now, latestEnd),
+    latest.day === today ? bytes : latest.last_bytes,
+    now,
+    latest.day
+  ).run();
+  if (latest.day !== today) {
+    let cursor = latestEnd;
+    let filled = 0;
+    while (cursor + DAY_MS <= dayStart(today) && filled < 400) {
+      const day = utcDay(cursor);
+      await env.DB.prepare(`INSERT OR IGNORE INTO storage_usage_daily
+        (day, peak_bytes, kibibyte_seconds, last_sample_at, last_bytes, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).bind(day, latest.last_bytes, Math.ceil(Number(latest.last_bytes) / 1024) * 86400, cursor + DAY_MS, latest.last_bytes, now).run();
+      cursor += DAY_MS;
+      filled += 1;
+    }
+    await env.DB.prepare(`INSERT OR REPLACE INTO storage_usage_daily
+      (day, peak_bytes, kibibyte_seconds, last_sample_at, last_bytes, updated_at)
+      VALUES (?, ?, 0, ?, ?, ?)`).bind(today, bytes, now, bytes, now).run();
+  }
+}
+async function effectiveBudget(env, policy, now) {
+  if (policy.monthlyByteDayBudget == null) return policy.budgetBytes;
+  const month = new Date(now).toISOString().slice(0, 7);
+  const consumed = await env.DB.prepare(`SELECT COALESCE(SUM(kibibyte_seconds), 0) AS value
+    FROM storage_usage_daily WHERE day >= ? AND day < ?`).bind(`${month}-01`, `${month}-32`).first();
+  const current = new Date(now);
+  const daysInMonth = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + 1, 0)).getUTCDate();
+  const remainingDays = Math.max(1, daysInMonth - current.getUTCDate() + 1);
+  const remainingByteDays = Math.max(0, policy.monthlyByteDayBudget - Number(consumed?.value ?? 0) * 1024 / 86400);
+  return Math.min(policy.budgetBytes, Math.floor(remainingByteDays / remainingDays));
+}
+function retryDelay(attempts) {
+  return Math.min(MAX_DELETE_RETRY_MS, 6e4 * 2 ** Math.min(6, Math.max(0, attempts)));
+}
+async function transitionExpiredFiles(env, now) {
+  const reservations = await env.DB.prepare(`UPDATE files SET state = 'delete_pending', deleted_at = COALESCE(deleted_at, ?),
+    delete_reason = 'retention_expired', r2_delete_retry_at = ?
+    WHERE state = 'pending' AND upload_reservation_expires_at IS NOT NULL AND upload_reservation_expires_at <= ?`).bind(now, now, now).run();
+  const files = await env.DB.prepare(`UPDATE files SET state = 'delete_pending', deleted_at = COALESCE(deleted_at, ?),
+    delete_reason = 'retention_expired', r2_delete_retry_at = ?
+    WHERE state IN ('pending', 'uploaded', 'ready') AND expires_at <= ?`).bind(now, now, now).run();
+  return { reservations: Number(reservations.meta.changes), files: Number(files.meta.changes) };
+}
+async function transitionPressureCandidates(env, reclaimBytes, now) {
+  if (reclaimBytes <= 0) return { files: 0, bytes: 0 };
+  const candidates = await env.DB.prepare(`SELECT f.id, COALESCE(f.actual_size, f.expected_size) AS size,
+    EXISTS(SELECT 1 FROM pushes p WHERE p.file_id = f.id AND p.pinned_at IS NOT NULL
+      AND p.deleted_at IS NULL AND p.expired_at IS NULL) AS protected
+    FROM files f WHERE f.state = 'ready'
+    ORDER BY protected ASC, f.created_at ASC, size DESC, f.id ASC`).all();
+  let bytes = 0;
+  let files = 0;
+  for (const candidate of candidates.results) {
+    if (bytes >= reclaimBytes) break;
+    const result = await env.DB.prepare(`UPDATE files SET state = 'delete_pending', deleted_at = COALESCE(deleted_at, ?),
+      delete_reason = 'storage_pressure', r2_delete_retry_at = ? WHERE id = ? AND state = 'ready'`).bind(now, now, candidate.id).run();
+    if (result.meta.changes === 1) {
+      files += 1;
+      bytes += Number(candidate.size);
+    }
+  }
+  return { files, bytes };
+}
+async function processPendingDeletes(env, runtime, report) {
+  const now = runtime.now();
+  const rows = await env.DB.prepare(`SELECT * FROM files WHERE state = 'delete_pending'
+    AND (r2_delete_retry_at IS NULL OR r2_delete_retry_at <= ?) ORDER BY deleted_at, id LIMIT 100`).bind(now).all();
+  for (const row of rows.results) {
+    try {
+      await env.FILES.delete(row.r2_key);
+    } catch {
+      report.deleteFailures += 1;
+      try {
+        await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
+          r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay(Number(row.r2_delete_attempts)), row.id).run();
+      } catch {
+        report.errors += 1;
+      }
+      continue;
+    }
+    try {
+      const finalState = row.delete_reason === "retention_expired" && row.actual_size != null ? "expired" : "deleted";
+      const results = await env.DB.batch([
+        env.DB.prepare(`UPDATE files SET state = ?, original_name = 'expired-file.bin', content_type = 'application/octet-stream',
+          expected_sha256 = NULL, actual_sha256 = NULL, upload_reservation_expires_at = NULL,
+          r2_delete_retry_at = NULL, r2_delete_error_code = NULL WHERE id = ? AND state = 'delete_pending'`).bind(finalState, row.id),
+        env.DB.prepare(`UPDATE pushes SET payload_json = NULL, ciphertext = '', nonce = '', modified_at = ?
+          WHERE file_id = ?`).bind(now, row.id)
+      ]);
+      if (results[0].meta.changes === 1) {
+        await markUndeliveredMissed(env, row.id, row.delete_reason ?? "retention_expired", runtime);
+        report.deletedObjects += 1;
+        if (row.delete_reason === "storage_pressure") {
+          report.pressureEvictedFiles += 1;
+          report.pressureEvictedBytes += Number(row.actual_size ?? row.expected_size);
+        }
+      }
+    } catch {
+      report.errors += 1;
+      try {
+        await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
+          r2_delete_retry_at = ?, r2_delete_error_code = 'd1_finalize_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay(Number(row.r2_delete_attempts)), row.id).run();
+      } catch {
+        report.errors += 1;
+      }
+    }
+  }
+}
+async function cleanupMetadata(env, now, report) {
+  const statements = [
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL").bind(now),
+    env.DB.prepare("DELETE FROM bootstrap_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
+    env.DB.prepare("DELETE FROM file_tickets WHERE expires_at <= ?").bind(now - TICKET_RECORD_TTL_MS),
+    env.DB.prepare("DELETE FROM storage_usage_daily WHERE day < ?").bind(utcDay(now - 400 * DAY_MS))
+  ];
+  for (const statement of statements) {
+    try {
+      await statement.run();
+    } catch {
+      report.errors += 1;
+    }
+  }
+  try {
+    const expired = await env.DB.prepare(`UPDATE pushes SET expired_at = ?, status = 'expired', modified_at = ?,
+      payload_json = NULL, ciphertext = '', nonce = ''
+      WHERE type != 'file' AND expires_at <= ? AND expired_at IS NULL AND deleted_at IS NULL AND pinned_at IS NULL`).bind(now, now, now).run();
+    report.expiredPushes = Number(expired.meta.changes);
+  } catch {
+    report.errors += 1;
+  }
+  try {
+    const aliases = await env.DB.prepare(`UPDATE pushes SET deleted_at = ?, status = 'deleted', modified_at = ?,
+      payload_json = NULL, ciphertext = '', nonce = ''
+      WHERE type = 'file' AND deleted_at IS NULL AND file_id IN
+        (SELECT id FROM files WHERE alias_expires_at <= ? AND state IN ('expired', 'deleted'))`).bind(now, now, now).run();
+    report.aliasTombstones = Number(aliases.meta.changes);
+  } catch {
+    report.errors += 1;
+  }
+  try {
+    const tombstones = await env.DB.prepare("DELETE FROM pushes WHERE deleted_at IS NOT NULL AND deleted_at <= ?").bind(now - TOMBSTONE_TTL_MS).run();
+    report.purgedTombstones = Number(tombstones.meta.changes);
+  } catch {
+    report.errors += 1;
+  }
+  try {
+    const aliases = await env.DB.prepare(`DELETE FROM files WHERE alias_expires_at <= ?
+      AND state IN ('expired', 'deleted') AND NOT EXISTS (SELECT 1 FROM pushes WHERE pushes.file_id = files.id)`).bind(now - TOMBSTONE_TTL_MS).run();
+    report.purgedFileAliases = Number(aliases.meta.changes);
+  } catch {
+    report.errors += 1;
+  }
+}
+async function cleanupExpiredMetadata(env, runtime, requiredBytes = 0) {
+  const policy = storagePolicy(env);
+  const initial = await storageTotals(env);
+  const report = {
+    ...initial,
+    effectiveBudgetBytes: policy.budgetBytes,
+    expiredReservations: 0,
+    expiredFiles: 0,
+    pressureEvictedFiles: 0,
+    pressureEvictedBytes: 0,
+    deletedObjects: 0,
+    deleteFailures: 0,
+    expiredPushes: 0,
+    aliasTombstones: 0,
+    purgedTombstones: 0,
+    purgedFileAliases: 0,
+    errors: 0
+  };
+  const now = runtime.now();
+  try {
+    await recordUsageSample(env, now, initial.totalBytes);
+    report.effectiveBudgetBytes = await effectiveBudget(env, policy, now);
+  } catch {
+    report.errors += 1;
+  }
+  try {
+    const expired = await transitionExpiredFiles(env, now);
+    report.expiredReservations = expired.reservations;
+    report.expiredFiles = expired.files;
+  } catch {
+    report.errors += 1;
+  }
+  await processPendingDeletes(env, runtime, report);
+  let current = await storageTotals(env);
+  const highWatermark = Math.floor(report.effectiveBudgetBytes * policy.highWatermarkPercent / 100);
+  const cleanupTarget = Math.floor(report.effectiveBudgetBytes * policy.cleanupTargetPercent / 100);
+  if (current.totalBytes + Math.max(0, requiredBytes) > highWatermark) {
+    try {
+      await transitionPressureCandidates(
+        env,
+        current.totalBytes + Math.max(0, requiredBytes) - cleanupTarget,
+        now
+      );
+    } catch {
+      report.errors += 1;
+    }
+    await processPendingDeletes(env, runtime, report);
+    current = await storageTotals(env);
+  }
+  await cleanupMetadata(env, now, report);
+  try {
+    await recordUsageSample(env, now, current.totalBytes);
+  } catch {
+    report.errors += 1;
+  }
+  Object.assign(report, current);
+  return report;
 }
 
 // infra/cloudflare/worker/src/devices.ts
@@ -240,7 +617,6 @@ async function bootstrap(request, env, requestId, runtime) {
 
 // infra/cloudflare/worker/src/files.ts
 var MAX_FILE_BYTES = 25 * 1024 * 1024;
-var STORAGE_BUDGET_BYTES = 8 * 1024 * 1024 * 1024;
 var UPLOAD_TICKET_TTL_MS = 2 * 60 * 1e3;
 var DOWNLOAD_TICKET_TTL_MS = 2 * 60 * 1e3;
 var ALIAS_TTL_MS = 180 * 24 * 60 * 60 * 1e3;
@@ -269,15 +645,6 @@ async function ownedFile(env, userId, fileId) {
 async function touchFilePushes(env, fileId, now) {
   await env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId).run();
 }
-async function cleanupExpiredReservations(env, now) {
-  const expired = await env.DB.prepare(`SELECT * FROM files
-    WHERE state = 'pending' AND upload_reservation_expires_at <= ? ORDER BY upload_reservation_expires_at, id LIMIT 100`).bind(now).all();
-  for (const row of expired.results) {
-    await env.FILES.delete(row.r2_key);
-    await env.DB.prepare(`UPDATE files SET state = 'deleted', deleted_at = ?, delete_reason = 'retention_expired',
-      upload_reservation_expires_at = NULL WHERE id = ? AND state = 'pending'`).bind(now, row.id).run();
-  }
-}
 function ttlPrefix(seconds) {
   return seconds === 86400 ? "1d" : seconds === 604800 ? "7d" : "30d";
 }
@@ -299,12 +666,8 @@ async function initFile(request, env, auth, requestId, runtime) {
   if (expectedHash != null && !/^[a-f0-9]{64}$/.test(expectedHash)) return problem(422, "invalid_sha256", "sha256 must be a hexadecimal SHA-256 digest.", requestId);
   if (!TTL_SECONDS.has(expiresIn)) return problem(422, "invalid_file_ttl", "expires_in must be 86400, 604800, or 2592000 seconds.", requestId);
   const now = runtime.now();
-  await cleanupExpiredReservations(env, now);
-  const usage = await env.DB.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
-    COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
-    FROM files`).first();
-  if (Number(usage?.used_bytes ?? 0) + Number(usage?.reserved_bytes ?? 0) + size > STORAGE_BUDGET_BYTES) {
+  const cleanup = await cleanupExpiredMetadata(env, runtime, size);
+  if (cleanup.totalBytes + size > cleanup.effectiveBudgetBytes) {
     return problem(507, "storage_pressure", "Storage capacity is temporarily unavailable.", requestId);
   }
   const fileId = runtime.id("fil");
@@ -337,7 +700,7 @@ async function initFile(request, env, auth, requestId, runtime) {
 }
 async function uploadFile(request, env, requestId, ticket, runtime) {
   const now = runtime.now();
-  await cleanupExpiredReservations(env, now);
+  await cleanupExpiredMetadata(env, runtime);
   const tokenHash = await sha256Hex(ticket);
   const row = await env.DB.prepare(`SELECT f.*, t.expires_at AS ticket_expires_at, t.used_at AS ticket_used_at
     FROM file_tickets t JOIN files f ON f.id = t.file_id
@@ -393,18 +756,25 @@ async function getFile(env, auth, requestId, fileId) {
   const row = await ownedFile(env, auth.user_id, fileId);
   return row ? json(fileOut(row), { headers: { "x-request-id": requestId } }) : problem(404, "file_not_found", "File not found.", requestId);
 }
-async function createDownloadTicket(request, env, auth, requestId, fileId, runtime) {
-  const row = await ownedFile(env, auth.user_id, fileId);
-  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
-  if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
-  if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+async function issueDownloadTicket(env, userId, fileId, origin, runtime) {
+  const row = await ownedFile(env, userId, fileId);
+  if (!row || row.expires_at <= runtime.now() || row.state !== "ready") return null;
   const ticket = runtime.token();
   const now = runtime.now();
   const expiresAt = now + DOWNLOAD_TICKET_TTL_MS;
   await env.DB.prepare(`INSERT INTO file_tickets
     (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
-    VALUES (?, ?, ?, 'download', ?, ?, NULL)`).bind(await sha256Hex(ticket), auth.user_id, fileId, now, expiresAt).run();
-  return json({ file_id: fileId, download_url: `${new URL(request.url).origin}/mock-storage/downloads/${encodeURIComponent(ticket)}`, expires_at: iso(expiresAt) }, {
+    VALUES (?, ?, ?, 'download', ?, ?, NULL)`).bind(await sha256Hex(ticket), userId, fileId, now, expiresAt).run();
+  return { downloadUrl: `${origin}/mock-storage/downloads/${encodeURIComponent(ticket)}`, expiresAt };
+}
+async function createDownloadTicket(request, env, auth, requestId, fileId, runtime) {
+  const row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
+  if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
+  if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+  const ticket = await issueDownloadTicket(env, auth.user_id, fileId, new URL(request.url).origin, runtime);
+  if (!ticket) return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+  return json({ file_id: fileId, download_url: ticket.downloadUrl, expires_at: iso(ticket.expiresAt) }, {
     headers: { "x-request-id": requestId }
   });
 }
@@ -414,9 +784,12 @@ async function downloadFile(env, requestId, ticket, runtime) {
     WHERE t.token_hash = ? AND t.purpose = 'download'`).bind(await sha256Hex(ticket)).first();
   if (!row) return problem(403, "invalid_download_ticket", "The download ticket is invalid.", requestId);
   if (row.ticket_expires_at <= runtime.now()) return problem(410, "download_ticket_expired", "The download ticket has expired.", requestId);
+  if (row.ticket_used_at != null) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
   if (row.state !== "ready" || row.expires_at <= runtime.now()) return problem(410, "file_expired", "The file is no longer available.", requestId);
   const object = await env.FILES.get(row.r2_key);
   if (!object) return problem(410, "object_missing", "The object bytes are missing.", requestId);
+  const consumed = await env.DB.prepare("UPDATE file_tickets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL").bind(runtime.now(), await sha256Hex(ticket)).run();
+  if (consumed.meta.changes !== 1) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
   const headers = new Headers({
     "content-type": "application/octet-stream",
     "content-disposition": 'attachment; filename="pushbridge-file.bin"',
@@ -439,31 +812,26 @@ async function deleteFile(env, auth, requestId, fileId, runtime) {
     env.DB.prepare("DELETE FROM file_tickets WHERE file_id = ? AND purpose = 'upload'").bind(fileId),
     env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId)
   ]);
-  try {
-    await env.FILES.delete(row.r2_key);
-    await env.DB.prepare(`UPDATE files SET state = 'deleted', r2_delete_retry_at = NULL,
-      r2_delete_error_code = NULL WHERE id = ?`).bind(fileId).run();
-  } catch {
-    await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
-      r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ?`).bind(now + 6e4, fileId).run();
-    return problem(503, "file_delete_pending", "File deletion will be retried.", requestId);
-  }
+  await cleanupExpiredMetadata(env, runtime);
   row = await ownedFile(env, auth.user_id, fileId);
   if (!row) throw new Error("deleted file is missing");
+  if (row.state === "delete_pending") return problem(503, "file_delete_pending", "File deletion will be retried.", requestId);
   return json(fileOut(row), { headers: { "x-request-id": requestId } });
 }
 async function storageUsage(env, auth) {
   const row = await env.DB.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
+    COALESCE(SUM(CASE WHEN state IN ('ready', 'delete_pending') THEN COALESCE(actual_size, expected_size) ELSE 0 END), 0) AS used_bytes,
     COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
     FROM files WHERE user_id = ?`).bind(auth.user_id).first();
   const usedBytes = Number(row?.used_bytes ?? 0);
   const reservedBytes = Number(row?.reserved_bytes ?? 0);
-  const ratio = (usedBytes + reservedBytes) / STORAGE_BUDGET_BYTES;
+  const policy = storagePolicy(env);
+  const global = await storageTotals(env);
+  const ratio = global.totalBytes / policy.budgetBytes;
   return {
     used_bytes: usedBytes,
     reserved_bytes: reservedBytes,
-    quota_bytes: STORAGE_BUDGET_BYTES,
+    quota_bytes: policy.budgetBytes,
     reclaimable_bytes: usedBytes,
     pressure: ratio >= 0.95 ? "emergency" : ratio >= 0.85 ? "constrained" : ratio >= 0.7 ? "notice" : "normal",
     policy_id: "free-v1",
@@ -515,8 +883,243 @@ async function decodeCursor(value, auth, requestId) {
   }
 }
 
-// infra/cloudflare/worker/src/pushes.ts
+// infra/cloudflare/worker/src/web-push.ts
 var encoder = new TextEncoder();
+var MAX_WEB_PUSH_PLAINTEXT_BYTES = 3993;
+var WEB_PUSH_RECORD_SIZE = 4096;
+var DELIVERY_ATTEMPT_LIMIT = 3;
+var TRANSIENT_SEND_ATTEMPTS = 2;
+function concatenate(...arrays) {
+  const result = new Uint8Array(arrays.reduce((total, value) => total + value.byteLength, 0));
+  let offset = 0;
+  for (const value of arrays) {
+    result.set(value, offset);
+    offset += value.byteLength;
+  }
+  return result;
+}
+function uint32(value) {
+  const result = new Uint8Array(4);
+  new DataView(result.buffer).setUint32(0, value, false);
+  return result;
+}
+async function hkdf(salt, ikm, info, length) {
+  const key = await crypto.subtle.importKey("raw", ownedBuffer(ikm), "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({
+    name: "HKDF",
+    hash: "SHA-256",
+    salt: ownedBuffer(salt),
+    info: ownedBuffer(info)
+  }, key, length * 8));
+}
+function validateWebPushKey(name, encoded, expectedLength) {
+  const value = base64UrlDecode(encoded);
+  if (value.byteLength !== expectedLength) throw new Error(`${name} has an invalid length`);
+  return value;
+}
+async function encryptWebPushPayload(plaintext, receiverPublicKey, authenticationSecret) {
+  if (plaintext.byteLength > MAX_WEB_PUSH_PLAINTEXT_BYTES) throw new Error("Web Push payload exceeds the RFC 8291 limit");
+  const uaPublic = validateWebPushKey("p256dh", receiverPublicKey, 65);
+  if (uaPublic[0] !== 4) throw new Error("p256dh is not an uncompressed P-256 point");
+  const authSecret = validateWebPushKey("auth", authenticationSecret, 16);
+  const applicationKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const applicationPublic = new Uint8Array(await crypto.subtle.exportKey("raw", applicationKeys.publicKey));
+  const receiverKey = await crypto.subtle.importKey(
+    "raw",
+    ownedBuffer(uaPublic),
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    []
+  );
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: "ECDH", public: receiverKey },
+    applicationKeys.privateKey,
+    256
+  ));
+  const keyInfo = concatenate(encoder.encode("WebPush: info\0"), uaPublic, applicationPublic);
+  const inputKeyMaterial = await hkdf(authSecret, sharedSecret, keyInfo, 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const contentEncryptionKey = await hkdf(salt, inputKeyMaterial, encoder.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, inputKeyMaterial, encoder.encode("Content-Encoding: nonce\0"), 12);
+  const aesKey2 = await crypto.subtle.importKey("raw", ownedBuffer(contentEncryptionKey), "AES-GCM", false, ["encrypt"]);
+  const record = concatenate(plaintext, new Uint8Array([2]));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: ownedBuffer(nonce) },
+    aesKey2,
+    ownedBuffer(record)
+  ));
+  return concatenate(salt, uint32(WEB_PUSH_RECORD_SIZE), new Uint8Array([applicationPublic.byteLength]), applicationPublic, ciphertext);
+}
+function vapidPrivateKey(publicKey, privateKey) {
+  if (publicKey.byteLength !== 65 || publicKey[0] !== 4 || privateKey.byteLength !== 32) {
+    throw new Error("VAPID keys must be an uncompressed P-256 public key and a 32-byte private key");
+  }
+  return {
+    kty: "EC",
+    crv: "P-256",
+    x: base64UrlEncode(publicKey.slice(1, 33)),
+    y: base64UrlEncode(publicKey.slice(33, 65)),
+    d: base64UrlEncode(privateKey),
+    ext: true,
+    key_ops: ["sign"]
+  };
+}
+async function createVapidAuthorization(endpoint, publicKeyEncoded, privateKeyEncoded, subject, now) {
+  const endpointUrl = new URL(endpoint);
+  if (endpointUrl.protocol !== "https:") throw new Error("Web Push endpoint must use HTTPS");
+  if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) throw new Error("VAPID_SUBJECT must be a mailto or HTTPS URI");
+  const publicKey = validateWebPushKey("VAPID_PUBLIC_KEY", publicKeyEncoded, 65);
+  const privateKey = validateWebPushKey("VAPID_PRIVATE_KEY", privateKeyEncoded, 32);
+  const header = base64UrlEncode(encoder.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claims = base64UrlEncode(encoder.encode(JSON.stringify({
+    aud: endpointUrl.origin,
+    exp: Math.floor(now / 1e3) + 12 * 60 * 60,
+    sub: subject
+  })));
+  const unsigned = `${header}.${claims}`;
+  const signingKey = await crypto.subtle.importKey(
+    "jwk",
+    vapidPrivateKey(publicKey, privateKey),
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    signingKey,
+    encoder.encode(unsigned)
+  ));
+  return `vapid t=${unsigned}.${base64UrlEncode(signature)}, k=${publicKeyEncoded}`;
+}
+async function sendWebPush(request, env, now, fetcher = fetch) {
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) throw new Error("VAPID configuration is incomplete");
+  const body = await encryptWebPushPayload(encoder.encode(JSON.stringify(request.payload)), request.p256dh, request.auth);
+  const authorization = await createVapidAuthorization(
+    request.endpoint,
+    env.VAPID_PUBLIC_KEY,
+    env.VAPID_PRIVATE_KEY,
+    env.VAPID_SUBJECT,
+    now
+  );
+  const response = await fetcher(request.endpoint, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      authorization,
+      "content-encoding": "aes128gcm",
+      "content-type": "application/octet-stream",
+      ttl: "60",
+      urgency: "high"
+    },
+    body: ownedBuffer(body)
+  });
+  if (response.status >= 200 && response.status < 300) return { status: response.status, outcome: "delivered" };
+  if (response.status === 404 || response.status === 410) return { status: response.status, outcome: "gone" };
+  return { status: response.status, outcome: "retryable" };
+}
+function asText(value) {
+  return typeof value === "string" ? value : new TextDecoder().decode(value);
+}
+function subscriptionAad(row, field) {
+  return `pushbridge:web-push:${row.user_id}:${row.device_id}:${row.id}:${field}`;
+}
+async function decryptSubscription(row, dataKey) {
+  return {
+    endpoint: await decryptText(asText(row.endpoint_ciphertext), row.endpoint_nonce, dataKey, subscriptionAad(row, "endpoint")),
+    p256dh: await decryptText(asText(row.p256dh_ciphertext), row.p256dh_nonce, dataKey, subscriptionAad(row, "p256dh")),
+    auth: await decryptText(asText(row.auth_ciphertext), row.auth_nonce, dataKey, subscriptionAad(row, "auth"))
+  };
+}
+function deliveryPayload(row, subscription, origin, downloadUrl, deliveryToken, deliveryTokenExpiresAt) {
+  return {
+    version: 1,
+    kind: "file",
+    storage_namespace: subscription.storage_namespace,
+    file_download: {
+      push_id: row.push_id,
+      file_id: row.file_id,
+      size: Number(row.actual_size ?? row.expected_size),
+      mime_type: "application/octet-stream",
+      download_url: downloadUrl
+    },
+    file_delivery: {
+      delivery_id: row.id,
+      token: deliveryToken,
+      token_expires_at: new Date(deliveryTokenExpiresAt).toISOString(),
+      events_url: `${origin}/api/v1/file-deliveries/${encodeURIComponent(row.id)}/events`
+    }
+  };
+}
+async function recordSubscriptionSuccess(env, subscriptionId, runtime) {
+  await env.DB.prepare(`UPDATE web_push_subscriptions SET consecutive_failures = 0, last_failure_code = NULL,
+    last_success_at = ?, updated_at = ? WHERE id = ?`).bind(runtime.now(), runtime.now(), subscriptionId).run();
+}
+async function recordSubscriptionFailure(env, subscriptionId, code, revoke, runtime) {
+  await env.DB.prepare(`UPDATE web_push_subscriptions SET consecutive_failures = consecutive_failures + 1,
+    last_failure_code = ?, updated_at = ?, revoked_at = CASE WHEN ? THEN COALESCE(revoked_at, ?) ELSE revoked_at END
+    WHERE id = ?`).bind(code, runtime.now(), revoke ? 1 : 0, runtime.now(), subscriptionId).run();
+}
+async function sendWithLimitedRetry(request, env, runtime, fetcher) {
+  let result = { status: 0, outcome: "retryable" };
+  for (let attempt = 0; attempt < TRANSIENT_SEND_ATTEMPTS; attempt += 1) {
+    try {
+      result = await sendWebPush(request, env, runtime.now(), fetcher);
+    } catch {
+      result = { status: 0, outcome: "retryable" };
+    }
+    if (result.outcome !== "retryable") return result;
+  }
+  return result;
+}
+function webPushDeliveryConfigured(env) {
+  return Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT && env.WEB_PUSH_DATA_KEY);
+}
+async function deliverFilePush(env, pushId, origin, runtime, fetcher = fetch) {
+  if (!webPushDeliveryConfigured(env)) return;
+  const deliveries = await env.DB.prepare(`SELECT d.*, f.actual_size, f.expected_size
+    FROM file_deliveries d JOIN files f ON f.id = d.file_id
+    WHERE d.push_id = ? AND d.state IN ('pending', 'failed_retryable') AND d.attempt_count < ?
+    ORDER BY d.id`).bind(pushId, DELIVERY_ATTEMPT_LIMIT).all();
+  for (const delivery of deliveries.results) {
+    const subscriptions = await env.DB.prepare(`SELECT * FROM web_push_subscriptions
+      WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL ORDER BY created_at, id`).bind(delivery.user_id, delivery.destination_device_id).all();
+    if (subscriptions.results.length === 0) continue;
+    const deliveryToken = await issueDeliveryToken(env, delivery.id, runtime);
+    if (!deliveryToken) continue;
+    let delivered = false;
+    let failureCode = "web_push_failed";
+    for (const subscription of subscriptions.results) {
+      try {
+        const ticket = await issueDownloadTicket(env, delivery.user_id, delivery.file_id, origin, runtime);
+        if (!ticket) {
+          failureCode = "file_not_ready";
+          break;
+        }
+        const secrets = await decryptSubscription(subscription, env.WEB_PUSH_DATA_KEY);
+        const result = await sendWithLimitedRetry({
+          ...secrets,
+          payload: deliveryPayload(delivery, subscription, origin, ticket.downloadUrl, deliveryToken.token, deliveryToken.expiresAt)
+        }, env, runtime, fetcher);
+        if (result.outcome === "delivered") {
+          delivered = true;
+          await recordSubscriptionSuccess(env, subscription.id, runtime);
+        } else {
+          const gone = result.outcome === "gone";
+          failureCode = gone ? "web_push_subscription_gone" : `web_push_http_${result.status || "network"}`;
+          await recordSubscriptionFailure(env, subscription.id, failureCode, gone, runtime);
+        }
+      } catch {
+        failureCode = "web_push_crypto_error";
+        await recordSubscriptionFailure(env, subscription.id, failureCode, false, runtime);
+      }
+    }
+    if (delivered) await markDeliveryNotified(env, delivery.id, runtime);
+    else await markDeliveryFailed(env, delivery.id, failureCode, runtime);
+  }
+}
+
+// infra/cloudflare/worker/src/pushes.ts
+var encoder2 = new TextEncoder();
 var PUSH_SELECT = `SELECT
   p.*,
   f.state AS file_ref_state,
@@ -575,7 +1178,7 @@ async function createPush(request, env, auth, requestId, runtime) {
   const clientGuid = typeof body.client_guid === "string" ? body.client_guid : idempotencyKey ?? runtime.id("job");
   const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
   const payloadJson = JSON.stringify(payload);
-  if (encoder.encode(payloadJson).byteLength > 2e6) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
+  if (encoder2.encode(payloadJson).byteLength > 2e6) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
   if (type === "link") {
     const url = payload.url;
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return problem(422, "invalid_link", "Link URLs must use http or https.", requestId);
@@ -596,6 +1199,8 @@ async function createPush(request, env, auth, requestId, runtime) {
     if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
+    await ensureFileDeliveries(env, replay, runtime);
+    await deliverFilePush(env, replay.id, new URL(request.url).origin, runtime);
     return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
   let fileAliasExpiresAt = null;
@@ -617,10 +1222,14 @@ async function createPush(request, env, auth, requestId, runtime) {
   } catch {
     const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first();
     if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
+    await ensureFileDeliveries(env, raced, runtime);
+    await deliverFilePush(env, raced.id, new URL(request.url).origin, runtime);
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
   const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first();
   if (!row) throw new Error("created push is missing");
+  await ensureFileDeliveries(env, row, runtime);
+  await deliverFilePush(env, row.id, new URL(request.url).origin, runtime);
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
 async function listPushes(url, env, auth, requestId) {
@@ -661,10 +1270,140 @@ async function mutatePush(request, env, auth, requestId, pushId, runtime) {
 }
 
 // infra/cloudflare/worker/src/subscriptions.ts
-function webPushConfig(requestId) {
-  return json({ subscription_registration: false, delivery: false, vapid_public_key: "" }, { headers: { "x-request-id": requestId } });
+function registrationEnabled(env) {
+  return Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY);
 }
-async function handleSubscriptionRoute() {
+function deliveryEnabled(env) {
+  return registrationEnabled(env) && webPushDeliveryConfigured(env);
+}
+function validPublicKey(value) {
+  try {
+    const bytes = base64UrlDecode(value);
+    return bytes.byteLength === 65 && bytes[0] === 4;
+  } catch {
+    return false;
+  }
+}
+function webPushConfig(env, requestId) {
+  const registration = registrationEnabled(env) && validPublicKey(env.VAPID_PUBLIC_KEY ?? "");
+  return json({
+    subscription_registration: registration,
+    delivery: registration && deliveryEnabled(env),
+    vapid_public_key: registration ? env.VAPID_PUBLIC_KEY : ""
+  }, { headers: { "x-request-id": requestId } });
+}
+function asText2(value) {
+  return typeof value === "string" ? value : new TextDecoder().decode(value);
+}
+function aad(row, field) {
+  return `pushbridge:web-push:${row.user_id}:${row.device_id}:${row.id}:${field}`;
+}
+async function subscriptionOut(row, env) {
+  const key = env.WEB_PUSH_DATA_KEY;
+  if (!key) throw new Error("WEB_PUSH_DATA_KEY is unavailable");
+  return {
+    id: row.id,
+    device_id: row.device_id,
+    endpoint: await decryptText(asText2(row.endpoint_ciphertext), row.endpoint_nonce, key, aad(row, "endpoint")),
+    created_at: iso(row.created_at),
+    revoked_at: iso(row.revoked_at)
+  };
+}
+function parseSubscription(body, requestId) {
+  const allowed = /* @__PURE__ */ new Set(["endpoint", "p256dh", "auth", "storage_namespace", "local_cache_max_bytes"]);
+  if (Object.keys(body).some((field) => !allowed.has(field))) throw problem(422, "unexpected_field", "The subscription contains an unsupported field.", requestId);
+  const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw problem(422, "invalid_subscription_endpoint", "endpoint must be an absolute HTTPS URL.", requestId);
+  }
+  if (url.protocol !== "https:" || endpoint.length > 4096) throw problem(422, "invalid_subscription_endpoint", "endpoint must be an absolute HTTPS URL.", requestId);
+  const p256dh = typeof body.p256dh === "string" ? body.p256dh : "";
+  const auth = typeof body.auth === "string" ? body.auth : "";
+  try {
+    if (base64UrlDecode(p256dh).byteLength !== 65 || base64UrlDecode(auth).byteLength !== 16) throw new Error("invalid key length");
+  } catch {
+    throw problem(422, "invalid_subscription_keys", "p256dh and auth must be valid Web Push base64url keys.", requestId);
+  }
+  const storageNamespace = body.storage_namespace == null ? null : typeof body.storage_namespace === "string" ? body.storage_namespace.trim() : "";
+  if (storageNamespace != null && (!storageNamespace || storageNamespace.length > 200)) throw problem(422, "invalid_storage_namespace", "storage_namespace must contain 1 to 200 characters.", requestId);
+  const localCacheMaxBytes = body.local_cache_max_bytes == null ? null : typeof body.local_cache_max_bytes === "number" && Number.isSafeInteger(body.local_cache_max_bytes) ? body.local_cache_max_bytes : -1;
+  if (localCacheMaxBytes != null && (localCacheMaxBytes < 0 || localCacheMaxBytes > 2147483647)) throw problem(422, "invalid_local_cache_limit", "local_cache_max_bytes is outside the supported range.", requestId);
+  return { endpoint, p256dh, auth, storageNamespace, localCacheMaxBytes };
+}
+async function createSubscription(request, env, authContext, requestId, runtime) {
+  if (!registrationEnabled(env)) return problem(409, "web_push_registration_disabled", "Web Push subscription registration is disabled.", requestId);
+  const input = parseSubscription(await bodyJson(request, requestId), requestId);
+  const key = env.WEB_PUSH_DATA_KEY;
+  const endpointHash = await sha256Hex(input.endpoint);
+  const existing = await env.DB.prepare(`SELECT * FROM web_push_subscriptions
+    WHERE user_id = ? AND device_id = ? AND endpoint_hash = ?`).bind(authContext.user_id, authContext.device_id, endpointHash).first();
+  const now = runtime.now();
+  const id = existing?.id ?? runtime.id("sub");
+  const rowKey = { id, user_id: authContext.user_id, device_id: authContext.device_id };
+  const endpoint = await encryptText(input.endpoint, key, aad(rowKey, "endpoint"));
+  const p256dh = await encryptText(input.p256dh, key, aad(rowKey, "p256dh"));
+  const auth = await encryptText(input.auth, key, aad(rowKey, "auth"));
+  if (existing) {
+    await env.DB.prepare(`UPDATE web_push_subscriptions SET endpoint_ciphertext = ?, endpoint_nonce = ?,
+      p256dh_ciphertext = ?, p256dh_nonce = ?, auth_ciphertext = ?, auth_nonce = ?, storage_namespace = ?,
+      local_cache_max_bytes = ?, updated_at = ?, revoked_at = NULL WHERE id = ?`).bind(
+      endpoint.ciphertext,
+      endpoint.nonce,
+      p256dh.ciphertext,
+      p256dh.nonce,
+      auth.ciphertext,
+      auth.nonce,
+      input.storageNamespace,
+      input.localCacheMaxBytes,
+      now,
+      id
+    ).run();
+  } else {
+    await env.DB.prepare(`INSERT INTO web_push_subscriptions
+      (id, user_id, device_id, endpoint_ciphertext, endpoint_hash, endpoint_nonce, p256dh_ciphertext,
+       p256dh_nonce, auth_ciphertext, auth_nonce, storage_namespace, local_cache_max_bytes,
+       created_at, updated_at, revoked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
+      id,
+      authContext.user_id,
+      authContext.device_id,
+      endpoint.ciphertext,
+      endpointHash,
+      endpoint.nonce,
+      p256dh.ciphertext,
+      p256dh.nonce,
+      auth.ciphertext,
+      auth.nonce,
+      input.storageNamespace,
+      input.localCacheMaxBytes,
+      now,
+      now
+    ).run();
+  }
+  const row = await env.DB.prepare("SELECT * FROM web_push_subscriptions WHERE id = ?").bind(id).first();
+  if (!row) throw new Error("created subscription is missing");
+  return json(await subscriptionOut(row, env), { status: existing ? 200 : 201, headers: { "x-request-id": requestId } });
+}
+async function listSubscriptions(env, authContext, requestId) {
+  if (!registrationEnabled(env)) return problem(409, "web_push_registration_disabled", "Web Push subscription registration is disabled.", requestId);
+  const rows = await env.DB.prepare(`SELECT * FROM web_push_subscriptions
+    WHERE user_id = ? AND device_id = ? AND revoked_at IS NULL ORDER BY created_at, id`).bind(authContext.user_id, authContext.device_id).all();
+  return json(await Promise.all(rows.results.map((row) => subscriptionOut(row, env))), { headers: { "x-request-id": requestId } });
+}
+async function revokeSubscription(env, authContext, requestId, subscriptionId, runtime) {
+  const result = await env.DB.prepare(`UPDATE web_push_subscriptions SET revoked_at = ?, updated_at = ?
+    WHERE id = ? AND user_id = ? AND device_id = ? AND revoked_at IS NULL`).bind(runtime.now(), runtime.now(), subscriptionId, authContext.user_id, authContext.device_id).run();
+  if (result.meta.changes === 0) return problem(404, "subscription_not_found", "Active subscription not found for the current device.", requestId);
+  return new Response(null, { status: 204, headers: { "x-request-id": requestId, "cache-control": "no-store" } });
+}
+async function handleSubscriptionRoute(request, env, authContext, requestId, path, runtime) {
+  if (path === "/v1/web-push-subscriptions" && request.method === "POST") return createSubscription(request, env, authContext, requestId, runtime);
+  if (path === "/v1/web-push-subscriptions" && request.method === "GET") return listSubscriptions(env, authContext, requestId);
+  const match = path.match(/^\/v1\/web-push-subscriptions\/([^/]+)$/);
+  if (match && request.method === "DELETE") return revokeSubscription(env, authContext, requestId, decodeURIComponent(match[1]), runtime);
   return null;
 }
 
@@ -684,8 +1423,8 @@ function capabilities(env) {
     environment_id: env.APP_ENVIRONMENT ?? "cloudflare-worker",
     features: {
       realtime: false,
-      web_push_delivery: false,
-      web_push_subscription_registration: false,
+      web_push_delivery: webPushDeliveryConfigured(env),
+      web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: false,
       direct_upload: false,
       device_registration: true
@@ -730,8 +1469,10 @@ function createRouter(runtime) {
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
       const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
       if (publicFileResponse) return publicFileResponse;
+      const publicDeliveryResponse = await handlePublicDeliveryRoute(request, env, requestId, path, runtime);
+      if (publicDeliveryResponse) return publicDeliveryResponse;
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
-      if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(requestId);
+      if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(env, requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
       if (!path.startsWith("/v1/")) return problem(404, "not_found", "Endpoint not found.", requestId);
       const auth = await authenticate(request, env, requestId, runtime);
@@ -750,9 +1491,11 @@ function createRouter(runtime) {
         return mutatePush(request, env, auth, requestId, decodeURIComponent(pushMatch[1]), runtime);
       }
       if (request.method === "GET" && path === "/v1/storage/usage") return json(await storageUsage(env, auth), { headers: { "x-request-id": requestId } });
+      const deliveryListMatch = path.match(/^\/v1\/files\/([^/]+)\/deliveries$/);
+      if (deliveryListMatch && request.method === "GET") return listFileDeliveries(env, auth, requestId, decodeURIComponent(deliveryListMatch[1]));
       const fileResponse = await handleFileRoute(request, env, auth, requestId, path, runtime);
       if (fileResponse) return fileResponse;
-      const subscriptionResponse = await handleSubscriptionRoute();
+      const subscriptionResponse = await handleSubscriptionRoute(request, env, auth, requestId, path, runtime);
       if (subscriptionResponse) return subscriptionResponse;
       return problem(501, "not_implemented", "This application endpoint is not implemented.", requestId);
     } catch (error) {

@@ -80,4 +80,64 @@ describe('ApiClient', () => {
       message: 'body.handle: String should match pattern',
     });
   });
+
+  it('reports upload progress through XMLHttpRequest', async () => {
+    class SuccessfulUpload {
+      status = 204;
+      responseText = '';
+      upload: { onprogress: ((event: ProgressEvent) => void) | null } = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      timeout = 0;
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() { return null; }
+      abort() { this.onabort?.(); }
+      send(blob: Blob) {
+        this.upload.onprogress?.({ lengthComputable: true, loaded: 2, total: blob.size } as ProgressEvent);
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', SuccessfulUpload);
+    const progress = vi.fn();
+
+    await new ApiClient(settings).upload({ method: 'PUT', url: '/upload', headers: {}, expires_at: '2026-01-01T00:01:00Z' }, new Blob(['data']), {
+      onProgress: progress,
+    });
+
+    expect(progress).toHaveBeenNthCalledWith(1, 2, 4);
+    expect(progress).toHaveBeenLastCalledWith(4, 4);
+  });
+
+  it('turns an explicit upload abort into a retryable user action instead of a timeout', async () => {
+    class CancelledUpload {
+      status = 0;
+      responseText = '';
+      upload = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      timeout = 0;
+      withCredentials = false;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() { return null; }
+      abort() { this.onabort?.(); }
+      send() {}
+    }
+    vi.stubGlobal('XMLHttpRequest', CancelledUpload);
+    const controller = new AbortController();
+    const uploading = new ApiClient(settings).upload(
+      { method: 'PUT', url: '/upload', headers: {}, expires_at: '2026-01-01T00:01:00Z' },
+      new Blob(['data']),
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    await expect(uploading).rejects.toMatchObject({ code: 'upload_cancelled', status: 0 });
+  });
 });

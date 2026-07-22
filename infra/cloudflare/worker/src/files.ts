@@ -1,10 +1,10 @@
 import { sha256Hex } from "./crypto";
+import { cleanupExpiredMetadata, storagePolicy, storageTotals } from "./cleanup";
 import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, Env, FileRow, Runtime } from "./types";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const STORAGE_BUDGET_BYTES = 8 * 1024 * 1024 * 1024;
 const UPLOAD_TICKET_TTL_MS = 2 * 60 * 1000;
 const DOWNLOAD_TICKET_TTL_MS = 2 * 60 * 1000;
 const ALIAS_TTL_MS = 180 * 24 * 60 * 60 * 1000;
@@ -43,17 +43,6 @@ async function touchFilePushes(env: Env, fileId: string, now: number): Promise<v
     .bind(now, fileId).run();
 }
 
-async function cleanupExpiredReservations(env: Env, now: number): Promise<void> {
-  const expired = await env.DB.prepare(`SELECT * FROM files
-    WHERE state = 'pending' AND upload_reservation_expires_at <= ? ORDER BY upload_reservation_expires_at, id LIMIT 100`)
-    .bind(now).all<FileRow>();
-  for (const row of expired.results) {
-    await env.FILES.delete(row.r2_key);
-    await env.DB.prepare(`UPDATE files SET state = 'deleted', deleted_at = ?, delete_reason = 'retention_expired',
-      upload_reservation_expires_at = NULL WHERE id = ? AND state = 'pending'`).bind(now, row.id).run();
-  }
-}
-
 function ttlPrefix(seconds: number): string {
   return seconds === 86_400 ? "1d" : seconds === 604_800 ? "7d" : "30d";
 }
@@ -77,12 +66,8 @@ async function initFile(request: Request, env: Env, auth: AuthContext, requestId
   if (!TTL_SECONDS.has(expiresIn)) return problem(422, "invalid_file_ttl", "expires_in must be 86400, 604800, or 2592000 seconds.", requestId);
 
   const now = runtime.now();
-  await cleanupExpiredReservations(env, now);
-  const usage = await env.DB.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
-    COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
-    FROM files`).first<{ used_bytes: number; reserved_bytes: number }>();
-  if (Number(usage?.used_bytes ?? 0) + Number(usage?.reserved_bytes ?? 0) + size > STORAGE_BUDGET_BYTES) {
+  const cleanup = await cleanupExpiredMetadata(env, runtime, size);
+  if (cleanup.totalBytes + size > cleanup.effectiveBudgetBytes) {
     return problem(507, "storage_pressure", "Storage capacity is temporarily unavailable.", requestId);
   }
 
@@ -119,7 +104,7 @@ async function initFile(request: Request, env: Env, auth: AuthContext, requestId
 
 async function uploadFile(request: Request, env: Env, requestId: string, ticket: string, runtime: Runtime): Promise<Response> {
   const now = runtime.now();
-  await cleanupExpiredReservations(env, now);
+  await cleanupExpiredMetadata(env, runtime);
   const tokenHash = await sha256Hex(ticket);
   const row = await env.DB.prepare(`SELECT f.*, t.expires_at AS ticket_expires_at, t.used_at AS ticket_used_at
     FROM file_tickets t JOIN files f ON f.id = t.file_id
@@ -179,19 +164,33 @@ async function getFile(env: Env, auth: AuthContext, requestId: string, fileId: s
   return row ? json(fileOut(row), { headers: { "x-request-id": requestId } }) : problem(404, "file_not_found", "File not found.", requestId);
 }
 
-async function createDownloadTicket(request: Request, env: Env, auth: AuthContext, requestId: string, fileId: string, runtime: Runtime): Promise<Response> {
-  const row = await ownedFile(env, auth.user_id, fileId);
-  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
-  if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
-  if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+export async function issueDownloadTicket(
+  env: Env,
+  userId: string,
+  fileId: string,
+  origin: string,
+  runtime: Runtime,
+): Promise<{ downloadUrl: string; expiresAt: number } | null> {
+  const row = await ownedFile(env, userId, fileId);
+  if (!row || row.expires_at <= runtime.now() || row.state !== "ready") return null;
   const ticket = runtime.token();
   const now = runtime.now();
   const expiresAt = now + DOWNLOAD_TICKET_TTL_MS;
   await env.DB.prepare(`INSERT INTO file_tickets
     (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
     VALUES (?, ?, ?, 'download', ?, ?, NULL)`)
-    .bind(await sha256Hex(ticket), auth.user_id, fileId, now, expiresAt).run();
-  return json({ file_id: fileId, download_url: `${new URL(request.url).origin}/mock-storage/downloads/${encodeURIComponent(ticket)}`, expires_at: iso(expiresAt) }, {
+    .bind(await sha256Hex(ticket), userId, fileId, now, expiresAt).run();
+  return { downloadUrl: `${origin}/mock-storage/downloads/${encodeURIComponent(ticket)}`, expiresAt };
+}
+
+async function createDownloadTicket(request: Request, env: Env, auth: AuthContext, requestId: string, fileId: string, runtime: Runtime): Promise<Response> {
+  const row = await ownedFile(env, auth.user_id, fileId);
+  if (!row) return problem(404, "file_not_found", "File not found.", requestId);
+  if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
+  if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+  const ticket = await issueDownloadTicket(env, auth.user_id, fileId, new URL(request.url).origin, runtime);
+  if (!ticket) return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
+  return json({ file_id: fileId, download_url: ticket.downloadUrl, expires_at: iso(ticket.expiresAt) }, {
     headers: { "x-request-id": requestId },
   });
 }
@@ -203,9 +202,13 @@ async function downloadFile(env: Env, requestId: string, ticket: string, runtime
     .bind(await sha256Hex(ticket)).first<TicketRow>();
   if (!row) return problem(403, "invalid_download_ticket", "The download ticket is invalid.", requestId);
   if (row.ticket_expires_at <= runtime.now()) return problem(410, "download_ticket_expired", "The download ticket has expired.", requestId);
+  if (row.ticket_used_at != null) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
   if (row.state !== "ready" || row.expires_at <= runtime.now()) return problem(410, "file_expired", "The file is no longer available.", requestId);
   const object = await env.FILES.get(row.r2_key);
   if (!object) return problem(410, "object_missing", "The object bytes are missing.", requestId);
+  const consumed = await env.DB.prepare("UPDATE file_tickets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL")
+    .bind(runtime.now(), await sha256Hex(ticket)).run();
+  if (consumed.meta.changes !== 1) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
   const headers = new Headers({
     "content-type": "application/octet-stream",
     "content-disposition": "attachment; filename=\"pushbridge-file.bin\"",
@@ -229,32 +232,27 @@ async function deleteFile(env: Env, auth: AuthContext, requestId: string, fileId
     env.DB.prepare("DELETE FROM file_tickets WHERE file_id = ? AND purpose = 'upload'").bind(fileId),
     env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId),
   ]);
-  try {
-    await env.FILES.delete(row.r2_key);
-    await env.DB.prepare(`UPDATE files SET state = 'deleted', r2_delete_retry_at = NULL,
-      r2_delete_error_code = NULL WHERE id = ?`).bind(fileId).run();
-  } catch {
-    await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
-      r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ?`).bind(now + 60_000, fileId).run();
-    return problem(503, "file_delete_pending", "File deletion will be retried.", requestId);
-  }
+  await cleanupExpiredMetadata(env, runtime);
   row = await ownedFile(env, auth.user_id, fileId);
   if (!row) throw new Error("deleted file is missing");
+  if (row.state === "delete_pending") return problem(503, "file_delete_pending", "File deletion will be retried.", requestId);
   return json(fileOut(row), { headers: { "x-request-id": requestId } });
 }
 
 export async function storageUsage(env: Env, auth: AuthContext): Promise<Record<string, unknown>> {
   const row = await env.DB.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN state = 'ready' THEN actual_size ELSE 0 END), 0) AS used_bytes,
+    COALESCE(SUM(CASE WHEN state IN ('ready', 'delete_pending') THEN COALESCE(actual_size, expected_size) ELSE 0 END), 0) AS used_bytes,
     COALESCE(SUM(CASE WHEN state IN ('pending', 'uploaded') THEN expected_size ELSE 0 END), 0) AS reserved_bytes
     FROM files WHERE user_id = ?`).bind(auth.user_id).first<{ used_bytes: number; reserved_bytes: number }>();
   const usedBytes = Number(row?.used_bytes ?? 0);
   const reservedBytes = Number(row?.reserved_bytes ?? 0);
-  const ratio = (usedBytes + reservedBytes) / STORAGE_BUDGET_BYTES;
+  const policy = storagePolicy(env);
+  const global = await storageTotals(env);
+  const ratio = global.totalBytes / policy.budgetBytes;
   return {
     used_bytes: usedBytes,
     reserved_bytes: reservedBytes,
-    quota_bytes: STORAGE_BUDGET_BYTES,
+    quota_bytes: policy.budgetBytes,
     reclaimable_bytes: usedBytes,
     pressure: ratio >= .95 ? "emergency" : ratio >= .85 ? "constrained" : ratio >= .7 ? "notice" : "normal",
     policy_id: "free-v1",

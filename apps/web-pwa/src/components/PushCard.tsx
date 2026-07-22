@@ -4,6 +4,14 @@ import { Icon, type IconName } from './Icon';
 
 const typeLabels = { note: 'ノート', link: 'リンク', file: 'ファイル' } as const;
 const typeIcons: Record<PushRecord['type'], IconName> = { note: 'note', link: 'link', file: 'file' };
+const deliveryLabels = {
+  pending: '配送待ち',
+  notified: '通知済み',
+  fetching: '取得中',
+  cached: '保存済み',
+  failed_retryable: '再試行中',
+  missed: '取得不可',
+} as const;
 
 function contentForCopy(push: PushRecord): string {
   if (push.url) return push.url;
@@ -50,6 +58,10 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
     ? fileState === 'deleted' ? '削除済み' : '期限切れ'
     : fileReady ? '保存' : '準備中';
   const sentHere = Boolean(currentDeviceId && push.source_device_id === currentDeviceId);
+  const deliveryCounts = push.file_deliveries?.reduce<Record<string, number>>((counts, delivery) => ({
+    ...counts,
+    [delivery.state]: (counts[delivery.state] ?? 0) + 1,
+  }), {});
   const availabilityLabel = push.local_file_cached
     ? 'この端末に保存済み'
     : fileMissed
@@ -96,6 +108,15 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
           </div>
         )}
         {fileMissed && <p className="push-body muted-copy">この端末では同期できず、サーバーから削除されました。</p>}
+        {sentHere && deliveryCounts && Object.keys(deliveryCounts).length > 0 && (
+          <div className="delivery-statuses" aria-label="送信先端末のファイル配送状態">
+            {Object.entries(deliveryLabels).map(([state, label]) => deliveryCounts[state] ? (
+              <span className={`status-chip${state === 'missed' || state === 'failed_retryable' ? ' muted' : ''}`} key={state}>
+                {label} {deliveryCounts[state]}台
+              </span>
+            ) : null)}
+          </div>
+        )}
 
         <div className="push-footer">
           <div className="meta-row">

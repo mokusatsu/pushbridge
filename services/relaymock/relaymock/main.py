@@ -15,6 +15,7 @@ from .openapi import install_custom_openapi
 from .routers import (
     auth_routes,
     devices,
+    deliveries,
     files,
     mock_admin,
     pushes,
@@ -143,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(devices.router)
     app.include_router(pushes.router)
     app.include_router(files.router)
+    app.include_router(deliveries.router)
     app.include_router(subscriptions.router)
     if resolved.enable_mock_admin:
         app.include_router(mock_admin.router)

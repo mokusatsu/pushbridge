@@ -1,5 +1,6 @@
 import { authenticate, bootstrap } from "./auth";
 import { currentDevice, linkDevice, listDevices, mutateDevice } from "./devices";
+import { handlePublicDeliveryRoute, listFileDeliveries } from "./deliveries";
 import { handleFileRoute, handlePublicFileRoute, storageUsage } from "./files";
 import { createPush, getPush, listPushes, mutatePush } from "./pushes";
 import { getRequestId, json, problem } from "./response";
@@ -33,8 +34,10 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
       const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
       if (publicFileResponse) return publicFileResponse;
+      const publicDeliveryResponse = await handlePublicDeliveryRoute(request, env, requestId, path, runtime);
+      if (publicDeliveryResponse) return publicDeliveryResponse;
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
-      if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(requestId);
+      if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(env, requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
       if (!path.startsWith("/v1/")) return problem(404, "not_found", "Endpoint not found.", requestId);
 
@@ -56,9 +59,11 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       }
 
       if (request.method === "GET" && path === "/v1/storage/usage") return json(await storageUsage(env, auth), { headers: { "x-request-id": requestId } });
+      const deliveryListMatch = path.match(/^\/v1\/files\/([^/]+)\/deliveries$/);
+      if (deliveryListMatch && request.method === "GET") return listFileDeliveries(env, auth, requestId, decodeURIComponent(deliveryListMatch[1]));
       const fileResponse = await handleFileRoute(request, env, auth, requestId, path, runtime);
       if (fileResponse) return fileResponse;
-      const subscriptionResponse = await handleSubscriptionRoute();
+      const subscriptionResponse = await handleSubscriptionRoute(request, env, auth, requestId, path, runtime);
       if (subscriptionResponse) return subscriptionResponse;
       return problem(501, "not_implemented", "This application endpoint is not implemented.", requestId);
     } catch (error) {

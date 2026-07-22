@@ -1,6 +1,6 @@
 # Retention and local persistence
 
-Status: accepted for the PoC on 2026-07-21. This document supersedes earlier 24-hour default-file-TTL assumptions in documents 01, 04, and 08.
+Status: accepted for the PoC on 2026-07-21. Worker local implementation and fault injection completed on 2026-07-22; dev migrations 0006〜0007 were applied on 2026-07-23. Live Cron observation remains pending. This document supersedes earlier 24-hour default-file-TTL assumptions in documents 01, 04, and 08.
 
 ## Product rule
 

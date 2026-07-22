@@ -29,7 +29,9 @@ function openLocalDatabase(namespace) {
 async function cacheFileFromPush(data) {
   const item = data?.file_download;
   if (!item?.download_url || !item?.file_id || !item?.push_id || !data?.storage_namespace) return false;
-  const response = await fetch(item.download_url, { cache: 'no-store', credentials: 'omit' });
+  const downloadTarget = new URL(item.download_url, self.location.origin);
+  if (downloadTarget.origin !== self.location.origin) throw new Error('Cross-origin background download rejected');
+  const response = await fetch(downloadTarget.href, { cache: 'no-store', credentials: 'omit' });
   if (!response.ok) throw new Error('Background file download failed: ' + response.status);
   const blob = await response.blob();
   if (Number.isFinite(item.size) && item.size >= 0 && blob.size !== item.size) {
@@ -62,6 +64,25 @@ async function cacheFileFromPush(data) {
   } finally {
     db.close();
   }
+  return true;
+}
+
+async function acknowledgeFileDelivery(data, state, failureCode) {
+  const item = data?.file_delivery;
+  if (!item?.delivery_id || !item?.token) return false;
+  const target = new URL(item.events_url || ('/api/v1/file-deliveries/' + encodeURIComponent(item.delivery_id) + '/events'), self.location.origin);
+  if (target.origin !== self.location.origin) throw new Error('Cross-origin delivery acknowledgement rejected');
+  const response = await fetch(target.href, {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'omit',
+    headers: {
+      authorization: 'Bearer ' + item.token,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ state, ...(failureCode ? { failure_code: failureCode } : {}) }),
+  });
+  if (!response.ok) throw new Error('Delivery acknowledgement failed: ' + response.status);
   return true;
 }
 
@@ -142,9 +163,12 @@ self.addEventListener('push', (event) => {
   };
   event.waitUntil((async () => {
     let cached = false;
+    await acknowledgeFileDelivery(data, 'fetching').catch(() => false);
     try {
       cached = await cacheFileFromPush(data);
+      if (cached) await acknowledgeFileDelivery(data, 'cached');
     } catch {
+      await acknowledgeFileDelivery(data, 'failed_retryable', 'background_fetch_failed').catch(() => false);
       // Cursor sync retains the alias and later marks the undelivered file explicitly.
     }
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -176,6 +200,10 @@ function pwaServiceWorkerPlugin(): Plugin {
     name: 'pushbridge-service-worker',
     apply: 'build',
     generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (output.type === 'chunk') output.code = output.code.replace(/^[\t ]+$/gm, '');
+      }
+
       const generated = Object.keys(bundle)
         .filter((fileName) => !fileName.endsWith('.map') && fileName !== 'sw.js')
         .map((fileName) => `/${fileName}`);

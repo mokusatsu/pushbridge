@@ -9,12 +9,13 @@ function jobTitle(job: OutboxJob): string {
   return truncate(job.draft.body || '名称なしのPush', 80);
 }
 
-export function OutboxCard({ job, onRetry, onDelete }: {
+export function OutboxCard({ job, onRetry, onCancel, onDelete }: {
   job: OutboxJob;
   onRetry(): void;
+  onCancel(): void;
   onDelete(): void;
 }) {
-  const label = job.status === 'sending' ? '送信中' : job.status === 'failed' ? '要確認' : '送信待ち';
+  const label = job.status === 'sending' ? '送信中' : job.status === 'cancelled' ? 'キャンセル済み' : job.status === 'failed' ? '要確認' : '送信待ち';
   return (
     <article className={`outbox-card outbox-${job.status}`}>
       <div className="outbox-icon"><Icon name={job.status === 'failed' ? 'cloud-off' : 'clock'} size={20} /></div>
@@ -28,17 +29,27 @@ export function OutboxCard({ job, onRetry, onDelete }: {
           {job.file && <span>{formatBytes(job.file.size)}</span>}
           <span>{formatRelativeTime(job.created_at)}</span>
         </div>
+        {job.status === 'sending' && job.file && (
+          <div className="upload-progress-row">
+            <progress max="100" value={job.upload_progress ?? 0} aria-label={`${job.file.name}のアップロード進捗`} />
+            <span>{job.upload_progress ?? 0}%</span>
+          </div>
+        )}
         {job.last_error && <p className="error-text">{job.last_error}</p>}
       </div>
       <div className="card-actions">
-        {job.status === 'failed' && (
+        {(job.status === 'failed' || job.status === 'cancelled') && (
           <button className="button button-secondary button-small" type="button" onClick={onRetry}>
             <Icon name="retry" size={16} />再試行
           </button>
         )}
-        <button className="icon-button danger" type="button" onClick={onDelete} aria-label="送信箱から削除">
-          <Icon name="delete" size={18} />
-        </button>
+        {job.status === 'sending' && job.file ? (
+          <button className="button button-secondary button-small" type="button" onClick={onCancel}>キャンセル</button>
+        ) : (
+          <button className="icon-button danger" type="button" onClick={onDelete} aria-label="送信箱から削除">
+            <Icon name="delete" size={18} />
+          </button>
+        )}
       </div>
     </article>
   );

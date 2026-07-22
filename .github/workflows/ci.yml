@@ -44,3 +44,7 @@ jobs:
         run: make smoke
       - name: Local Cloudflare Worker and PWA smoke test
         run: npm run cloudflare:local:smoke
+      - name: Install Playwright Chromium
+        run: npm run --prefix apps/web-pwa test:e2e:install
+      - name: Browser PWA end-to-end test
+        run: npm run --prefix apps/web-pwa test:e2e

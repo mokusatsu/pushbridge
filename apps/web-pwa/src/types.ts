@@ -24,6 +24,25 @@ export interface FileAttachment {
   alias_expires_at?: string | null;
 }
 
+export type FileDeliveryState = 'pending' | 'notified' | 'fetching' | 'cached' | 'failed_retryable' | 'missed';
+
+export interface FileDelivery {
+  id: string;
+  push_id: string;
+  file_id: string;
+  destination_device_id: string;
+  state: FileDeliveryState;
+  created_at: string;
+  updated_at: string;
+  notified_at: string | null;
+  fetching_at: string | null;
+  cached_at: string | null;
+  failed_at: string | null;
+  missed_at: string | null;
+  failure_code: string | null;
+  attempt_count: number;
+}
+
 export interface PushRecord {
   id: string;
   user_id?: string;
@@ -51,6 +70,7 @@ export interface PushRecord {
   local_archived_at?: string | null;
   local_file_cached?: boolean;
   local_file_delivery?: 'cached' | 'pending' | 'missed';
+  file_deliveries?: FileDelivery[];
 }
 
 export interface CachedFile {
@@ -268,7 +288,7 @@ export interface ClientSettings {
   localFileCacheMaxBytes: number;
 }
 
-export type OutboxStatus = 'queued' | 'sending' | 'failed';
+export type OutboxStatus = 'queued' | 'sending' | 'cancelled' | 'failed';
 
 export interface QueuedFile {
   blob: Blob;
@@ -288,6 +308,8 @@ export interface OutboxJob {
   draft: SendPushDraft;
   file?: QueuedFile;
   uploaded_file?: FileAttachment;
+  /** Ephemeral UI state. A resumed transfer starts again at zero. */
+  upload_progress?: number;
   last_error?: string;
 }
 

@@ -95,6 +95,7 @@ export class AppRuntime {
   private destroyed = false;
   private syncPromise?: Promise<void>;
   private outboxPromise?: Promise<void>;
+  private readonly uploadControllers = new Map<string, AbortController>();
   private unsubscribeStorage?: () => void;
   private pollTimer?: number;
   private reconnectTimer?: number;
@@ -159,6 +160,8 @@ export class AppRuntime {
     if (this.pollTimer) window.clearTimeout(this.pollTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
     if (this.syncDebounceTimer) window.clearTimeout(this.syncDebounceTimer);
+    for (const controller of this.uploadControllers.values()) controller.abort();
+    this.uploadControllers.clear();
     this.closeRealtime();
   }
 
@@ -235,6 +238,8 @@ export class AppRuntime {
         if (!changes.has_more) break;
         if (page === MAX_SYNC_PAGES - 1) throw new Error('同期ページ数が安全上限を超えました。');
       }
+
+      await this.refreshSentFileDeliveries(currentDevice.id);
 
       await this.reloadCached();
       this.patch({
@@ -330,12 +335,13 @@ export class AppRuntime {
     const jobs = await this.db.listOutbox();
 
     for (const original of jobs) {
-      if (original.status === 'failed' || new Date(original.next_attempt_at).getTime() > Date.now()) continue;
+      if (original.status === 'failed' || original.status === 'cancelled' || new Date(original.next_attempt_at).getTime() > Date.now()) continue;
       let job: OutboxJob = {
         ...original,
         status: 'sending',
         attempts: original.attempts + 1,
         updated_at: nowIso(),
+        upload_progress: original.file && !original.uploaded_file ? 0 : undefined,
         last_error: undefined,
       };
       await this.db.putOutbox(job, false);
@@ -343,20 +349,29 @@ export class AppRuntime {
 
       try {
         if (job.file && !job.uploaded_file) {
-          const expiresIn = job.draft.expires_in
-            ?? this.snapshot.capabilities?.limits.default_file_ttl_seconds
-            ?? DEFAULT_FILE_TTL_SECONDS;
-          const init = await this.api.initFile({
-            name: job.file.name,
-            mime_type: job.file.mime_type,
-            size: job.file.size,
-            expires_in: expiresIn,
-            sha256: await sha256Hex(job.file.blob),
-          });
-          await this.api.uploadFile(init, job.file.blob);
-          const uploaded = await this.api.completeFile(init.file_id);
-          job = { ...job, uploaded_file: uploaded, updated_at: nowIso() };
-          await this.db.putOutbox(job, false);
+          const controller = new AbortController();
+          this.uploadControllers.set(job.id, controller);
+          try {
+            const expiresIn = job.draft.expires_in
+              ?? this.snapshot.capabilities?.limits.default_file_ttl_seconds
+              ?? DEFAULT_FILE_TTL_SECONDS;
+            const init = await this.api.initFile({
+              name: job.file.name,
+              mime_type: job.file.mime_type,
+              size: job.file.size,
+              expires_in: expiresIn,
+              sha256: await sha256Hex(job.file.blob),
+            });
+            await this.api.uploadFile(init, job.file.blob, {
+              signal: controller.signal,
+              onProgress: (loaded, total) => this.updateUploadProgress(job.id, loaded, total),
+            });
+            const uploaded = await this.api.completeFile(init.file_id);
+            job = { ...job, uploaded_file: uploaded, upload_progress: 100, updated_at: nowIso() };
+            await this.db.putOutbox(job, false);
+          } finally {
+            this.uploadControllers.delete(job.id);
+          }
         }
 
         const push = await this.api.createPush({
@@ -369,17 +384,20 @@ export class AppRuntime {
         await this.db.deleteOutbox(job.id, false);
         sentAny = true;
       } catch (error) {
+        const cancelled = error instanceof ApiError && error.code === 'upload_cancelled';
         const retryable = error instanceof ApiError ? error.retryable : false;
-        const shouldRetry = retryable && job.attempts < 8;
+        const shouldRetry = !cancelled && retryable && job.attempts < 8;
         const updated: OutboxJob = {
           ...job,
-          status: shouldRetry ? 'queued' : 'failed',
+          status: cancelled ? 'cancelled' : shouldRetry ? 'queued' : 'failed',
           updated_at: nowIso(),
           next_attempt_at: new Date(Date.now() + retryDelayMs(job.attempts)).toISOString(),
+          upload_progress: undefined,
           last_error: apiErrorMessage(error),
         };
         await this.db.putOutbox(updated, false);
-        if (!shouldRetry) this.notify('error', `送信に失敗しました: ${updated.last_error}`);
+        if (cancelled) this.notify('info', 'ファイルのアップロードをキャンセルしました。送信箱から再試行できます。');
+        else if (!shouldRetry) this.notify('error', `送信に失敗しました: ${updated.last_error}`);
       }
     }
 
@@ -400,15 +418,35 @@ export class AppRuntime {
       status: 'queued',
       next_attempt_at: nowIso(),
       updated_at: nowIso(),
+      upload_progress: undefined,
       last_error: undefined,
     });
     await this.reloadCached();
     if (navigator.onLine) void this.processOutbox();
   }
 
+  cancelOutbox(jobId: string): void {
+    this.uploadControllers.get(jobId)?.abort();
+  }
+
   async removeOutbox(jobId: string): Promise<void> {
     await this.db.deleteOutbox(jobId);
     await this.reloadCached();
+  }
+
+  private updateUploadProgress(jobId: string, loaded: number, total: number): void {
+    const uploadProgress = total > 0 ? Math.max(0, Math.min(100, Math.round((loaded / total) * 100))) : 0;
+    this.patch({
+      outbox: this.snapshot.outbox.map((job) => job.id === jobId ? { ...job, upload_progress: uploadProgress } : job),
+    });
+  }
+
+  private async refreshSentFileDeliveries(currentDeviceId: string): Promise<void> {
+    const pushes = (await this.db.listPushes()).filter((push) => push.file_id && push.source_device_id === currentDeviceId);
+    await Promise.all(pushes.map(async (push) => {
+      const deliveries = await this.api.listFileDeliveries(push.file_id!).catch(() => undefined);
+      if (deliveries) await this.db.putPush({ ...push, file_deliveries: deliveries }, false);
+    }));
   }
 
   async setDismissed(pushId: string, dismissed: boolean): Promise<void> {

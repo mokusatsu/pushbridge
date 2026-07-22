@@ -11,6 +11,8 @@
     "serve:local": "node tools/local-gateway.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium",
     "typecheck": "tsc -b --pretty false",
     "check": "npm run check:contract && npm run typecheck && npm run test && npm run build",
     "smoke:api": "node tools/api-smoke.mjs",
@@ -23,6 +25,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/http-proxy": "^1.17.17",

@@ -22,6 +22,7 @@ PushType = Literal["note", "link", "file"]
 FileState = Literal["pending", "uploaded", "ready", "delete_pending", "expired", "deleted"]
 FileDeleteReason = Literal["retention_expired", "storage_pressure", "user_deleted"]
 PushStatus = Literal["active", "dismissed", "deleted", "expired"]
+FileDeliveryState = Literal["pending", "notified", "fetching", "cached", "failed_retryable", "missed"]
 UriReference = Annotated[
     str,
     Field(min_length=1, json_schema_extra={"format": "uri-reference"}),
@@ -364,6 +365,28 @@ class FileOut(StrictModel):
     deleted_at: datetime | None
     delete_reason: FileDeleteReason | None = None
     alias_expires_at: datetime | None = None
+
+
+class FileDeliveryEventIn(StrictModel):
+    state: Literal["fetching", "cached", "failed_retryable"]
+    failure_code: str | None = Field(default=None, max_length=100)
+
+
+class FileDeliveryOut(StrictModel):
+    id: str
+    push_id: str
+    file_id: str
+    destination_device_id: str
+    state: FileDeliveryState
+    created_at: datetime
+    updated_at: datetime
+    notified_at: datetime | None
+    fetching_at: datetime | None
+    cached_at: datetime | None
+    failed_at: datetime | None
+    missed_at: datetime | None
+    failure_code: str | None
+    attempt_count: int = Field(ge=0)
 
 
 class FileInitOut(StrictModel):

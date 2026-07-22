@@ -306,6 +306,51 @@ variable "cleanup_cron" {
   default     = "17 3 * * *"
 }
 
+variable "storage_budget_bytes" {
+  description = "Operational R2 byte budget used by the application cleanup controller."
+  type        = number
+  default     = 8589934592
+
+  validation {
+    condition     = var.storage_budget_bytes >= 26214400
+    error_message = "storage_budget_bytes must allow at least one maximum-size file."
+  }
+}
+
+variable "storage_pressure_high_percent" {
+  description = "Projected usage percentage that starts pressure cleanup."
+  type        = number
+  default     = 95
+
+  validation {
+    condition     = var.storage_pressure_high_percent >= 1 && var.storage_pressure_high_percent <= 100
+    error_message = "storage_pressure_high_percent must be between 1 and 100."
+  }
+}
+
+variable "storage_cleanup_target_percent" {
+  description = "Usage percentage targeted after pressure cleanup."
+  type        = number
+  default     = 85
+
+  validation {
+    condition     = var.storage_cleanup_target_percent >= 1 && var.storage_cleanup_target_percent < var.storage_pressure_high_percent
+    error_message = "storage_cleanup_target_percent must be positive and lower than storage_pressure_high_percent."
+  }
+}
+
+variable "storage_monthly_byte_day_budget" {
+  description = "Optional monthly byte-day allowance. Null disables allowance-based throttling while daily usage is still recorded."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.storage_monthly_byte_day_budget == null || var.storage_monthly_byte_day_budget > 0
+    error_message = "storage_monthly_byte_day_budget must be null or positive."
+  }
+}
+
 variable "turnstile_mode" {
   description = "Turnstile widget mode."
   type        = string
@@ -328,6 +373,56 @@ variable "worker_plain_text_vars" {
       can(regex("^[A-Z][A-Z0-9_]*$", binding_name))
     ])
     error_message = "worker_plain_text_vars keys must be uppercase JavaScript binding names."
+  }
+}
+
+variable "vapid_public_key" {
+  description = "Base64url-encoded uncompressed P-256 VAPID public key exposed to the PWA."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.vapid_public_key == null || can(regex("^[A-Za-z0-9_-]{87}$", var.vapid_public_key))
+    error_message = "vapid_public_key must be an unpadded base64url 65-byte P-256 public key."
+  }
+}
+
+variable "vapid_private_key" {
+  description = "Base64url-encoded 32-byte P-256 VAPID private key. Stored as a Worker secret_text binding."
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+
+  validation {
+    condition     = var.vapid_private_key == null || can(regex("^[A-Za-z0-9_-]{43}$", var.vapid_private_key))
+    error_message = "vapid_private_key must be an unpadded base64url 32-byte P-256 private key."
+  }
+}
+
+variable "vapid_subject" {
+  description = "VAPID contact URI. Use a mailto URI or an HTTPS URI controlled by the operator."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.vapid_subject == null || can(regex("^(mailto:|https://)", var.vapid_subject))
+    error_message = "vapid_subject must be a mailto or HTTPS URI."
+  }
+}
+
+variable "web_push_data_key" {
+  description = "Base64url-encoded 32-byte AES key used to encrypt Web Push subscription fields at rest."
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+
+  validation {
+    condition     = var.web_push_data_key == null || can(regex("^[A-Za-z0-9_-]{43}$", var.web_push_data_key))
+    error_message = "web_push_data_key must be an unpadded base64url 32-byte key."
   }
 }
 

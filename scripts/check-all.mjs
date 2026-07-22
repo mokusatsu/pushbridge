@@ -62,8 +62,12 @@ run(terraform, ["-chdir=infra/cloudflare/infra", "fmt", "-check", ...terraformFi
 run(terraform, ["-chdir=infra/cloudflare/infra", "validate"]);
 run(process.execPath, ["--check", "infra/cloudflare/app/dist/sw.js"]);
 run(process.execPath, ["--check", "infra/cloudflare/scripts/render-wrangler-config.mjs"]);
+run(process.execPath, ["--check", "infra/cloudflare/scripts/generate-web-push-credentials.mjs"]);
+run(process.execPath, ["--check", "infra/cloudflare/scripts/render-web-push-tfvars.mjs"]);
 run(process.execPath, ["--check", "infra/cloudflare/scripts/diagnose-terraform-state.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-local-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-remote-smoke.mjs"]);
+run(process.execPath, ["--check", "apps/web-pwa/tools/e2e-relaymock.mjs"]);
+run(npm, [...npmPrefix, "--prefix", "apps/web-pwa", "run", "test:e2e", "--", "--list"]);
 
 console.log("All repository checks passed.");

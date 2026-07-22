@@ -14,6 +14,7 @@ from ..api_contract import (
 from ..auth import AuthContext, get_auth_context, get_database, get_settings
 from ..config import Settings
 from ..database import Database
+from .deliveries import ensure_file_deliveries
 from ..schemas import PushCreate, PushListOut, PushOut, PushPatch
 from ..services import (
     PUSH_WITH_FILE_SELECT,
@@ -132,6 +133,8 @@ def create_push(
                 )
             response.status_code = status.HTTP_200_OK
             response.headers["Idempotent-Replayed"] = "true"
+            ensure_file_deliveries(conn, existing, now_iso)
+            conn.commit()
             return push_from_row(existing, auth.device_id)
 
         if body.target.kind == "device":
@@ -190,6 +193,10 @@ def create_push(
                     expires_at,
                 ),
             )
+            inserted = conn.execute(
+                PUSH_WITH_FILE_SELECT + " WHERE p.id = ?", (push_id,)
+            ).fetchone()
+            ensure_file_deliveries(conn, inserted, now_iso)
             conn.commit()
         except sqlite3.IntegrityError:
             # Covers a race between two retries using the same idempotency key.
@@ -208,6 +215,8 @@ def create_push(
                 )
             response.status_code = status.HTTP_200_OK
             response.headers["Idempotent-Replayed"] = "true"
+            ensure_file_deliveries(conn, existing, now_iso)
+            conn.commit()
             return push_from_row(existing, auth.device_id)
 
         row = conn.execute(

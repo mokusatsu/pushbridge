@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { webPushDeliveryConfigured } from "./web-push";
 
 export function retention(env: Env): Record<string, number> {
   try {
@@ -16,8 +17,8 @@ export function capabilities(env: Env): Record<string, unknown> {
     environment_id: env.APP_ENVIRONMENT ?? "cloudflare-worker",
     features: {
       realtime: false,
-      web_push_delivery: false,
-      web_push_subscription_registration: false,
+      web_push_delivery: webPushDeliveryConfigured(env),
+      web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: false,
       direct_upload: false,
       device_registration: true,

@@ -1,7 +1,9 @@
 import { decodeCursor, encodeCursor } from "./cursor";
+import { ensureFileDeliveries } from "./deliveries";
 import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, Env, PushRow, Runtime } from "./types";
+import { deliverFilePush } from "./web-push";
 
 const encoder = new TextEncoder();
 const PUSH_SELECT = `SELECT
@@ -95,6 +97,8 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
     if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
+    await ensureFileDeliveries(env, replay, runtime);
+    await deliverFilePush(env, replay.id, new URL(request.url).origin, runtime);
     return json(pushOut(replay, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
 
@@ -120,10 +124,14 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
   } catch {
     const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first<PushRow>();
     if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
+    await ensureFileDeliveries(env, raced, runtime);
+    await deliverFilePush(env, raced.id, new URL(request.url).origin, runtime);
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
   }
   const row = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first<PushRow>();
   if (!row) throw new Error("created push is missing");
+  await ensureFileDeliveries(env, row, runtime);
+  await deliverFilePush(env, row.id, new URL(request.url).origin, runtime);
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
 

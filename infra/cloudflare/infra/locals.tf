@@ -33,15 +33,35 @@ locals {
     R2_BUCKET_NAME                  = local.r2_name
     TURNSTILE_SITE_KEY              = cloudflare_turnstile_widget.registration.sitekey
     FILE_RETENTION_POLICY           = jsonencode(var.file_retention_seconds)
+    STORAGE_BUDGET_BYTES            = tostring(var.storage_budget_bytes)
+    STORAGE_PRESSURE_HIGH_PERCENT   = tostring(var.storage_pressure_high_percent)
+    STORAGE_CLEANUP_TARGET_PERCENT  = tostring(var.storage_cleanup_target_percent)
   }
+
+  storage_allowance_vars = var.storage_monthly_byte_day_budget == null ? {} : {
+    STORAGE_MONTHLY_BYTE_DAY_BUDGET = tostring(var.storage_monthly_byte_day_budget)
+  }
+
+  web_push_plain_text_vars = merge(
+    var.vapid_public_key == null ? {} : { VAPID_PUBLIC_KEY = var.vapid_public_key },
+    var.vapid_subject == null ? {} : { VAPID_SUBJECT = var.vapid_subject }
+  )
+
+  web_push_secret_values = merge(
+    var.vapid_private_key == null ? {} : { VAPID_PRIVATE_KEY = var.vapid_private_key },
+    var.web_push_data_key == null ? {} : { WEB_PUSH_DATA_KEY = var.web_push_data_key }
+  )
 
   plain_text_vars = merge(
     var.worker_plain_text_vars,
+    local.web_push_plain_text_vars,
+    local.storage_allowance_vars,
     local.reserved_plain_text_vars
   )
 
   worker_secret_values = merge(
     var.worker_secrets,
+    local.web_push_secret_values,
     {
       TURNSTILE_SECRET_KEY = cloudflare_turnstile_widget.registration.secret
     }

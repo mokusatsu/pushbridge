@@ -6,6 +6,7 @@ import type {
   DeviceCredential,
   DownloadTicket,
   FileAttachment,
+  FileDelivery,
   FileInitRequest,
   FileInitResponse,
   LinkDeviceRequest,
@@ -18,7 +19,7 @@ import type {
   WebPushSubscriptionInput,
   WebPushSubscriptionRecord,
 } from '@/types';
-import { ApiClient } from './client';
+import { ApiClient, type UploadOptions } from './client';
 import { ApiError } from './errors';
 import {
   bootstrapResponseSchema,
@@ -27,6 +28,7 @@ import {
   devicesResponseSchema,
   downloadTicketSchema,
   fileCompleteResponseSchema,
+  fileDeliveriesResponseSchema,
   fileInitResponseSchema,
   fileMetadataResponseSchema,
   healthSchema,
@@ -304,8 +306,8 @@ export class LocalApi {
     return result;
   }
 
-  async uploadFile(init: FileInitResponse, blob: Blob): Promise<void> {
-    await this.client.upload(init.upload, blob);
+  async uploadFile(init: FileInitResponse, blob: Blob, options: UploadOptions = {}): Promise<void> {
+    await this.client.upload(init.upload, blob, options);
   }
 
   async completeFile(fileId: string): Promise<FileAttachment> {
@@ -332,6 +334,12 @@ export class LocalApi {
     }));
     this.fileCache.set(fileId, file);
     return file;
+  }
+
+  async listFileDeliveries(fileId: string): Promise<FileDelivery[]> {
+    return fileDeliveriesResponseSchema.parse(await this.client.request(
+      `${endpoints.files}/${encodeURIComponent(fileId)}/deliveries`,
+    ));
   }
 
   async getDownloadTicket(fileId: string): Promise<DownloadTicket> {

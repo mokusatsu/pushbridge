@@ -3,6 +3,7 @@ import type {
   Device,
   DeviceKind,
   FileAttachment,
+  FileDelivery,
   FileState,
   PushRecord,
   SystemCapabilities,
@@ -248,6 +249,25 @@ export const fileInitResponseSchema = z.object({
 
 export const fileCompleteResponseSchema = fileAttachmentSchema;
 export const fileMetadataResponseSchema = fileAttachmentSchema;
+
+export const fileDeliverySchema = z.object({
+  id: z.string(),
+  push_id: z.string(),
+  file_id: z.string(),
+  destination_device_id: z.string(),
+  state: z.enum(['pending', 'notified', 'fetching', 'cached', 'failed_retryable', 'missed']),
+  created_at: z.string(),
+  updated_at: z.string(),
+  notified_at: nullableString,
+  fetching_at: nullableString,
+  cached_at: nullableString,
+  failed_at: nullableString,
+  missed_at: nullableString,
+  failure_code: nullableString,
+  attempt_count: z.number().int().nonnegative(),
+}).strict() satisfies z.ZodType<FileDelivery>;
+
+export const fileDeliveriesResponseSchema = z.array(fileDeliverySchema);
 
 export const downloadTicketSchema = z.object({
   file_id: z.string(),

@@ -10,6 +10,8 @@
     "worker:check": "npm run worker:build && npm run worker:typecheck && npm run worker:test",
     "cloudflare:state:diagnose": "node infra/cloudflare/scripts/diagnose-terraform-state.mjs",
     "cloudflare:wrangler:render": "node infra/cloudflare/scripts/render-wrangler-config.mjs",
+    "cloudflare:web-push:generate": "node infra/cloudflare/scripts/generate-web-push-credentials.mjs",
+    "cloudflare:web-push:render": "node infra/cloudflare/scripts/render-web-push-tfvars.mjs",
     "cloudflare:local:migrate": "npx --yes wrangler@4 d1 migrations apply DB --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler",
     "cloudflare:local:dev": "npx --yes wrangler@4 dev --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler --ip 127.0.0.1 --port 8787",
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",

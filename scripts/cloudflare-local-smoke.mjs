@@ -72,7 +72,10 @@ try {
   const capabilities = await request("/api/v1/system/capabilities");
   assert(capabilities.response.status === 200 && capabilities.body.features.device_registration, "capabilities failed");
   assert(capabilities.body.features.direct_upload === false, "streaming adapter must not be advertised as direct upload");
+  assert(capabilities.body.features.web_push_delivery === false, "Web Push delivery must remain disabled without VAPID secrets");
   assert(capabilities.body.transports.upload.includes("server-ticket"), "server-ticket upload transport is missing");
+  const webPushConfig = await request("/api/v1/web-push-config");
+  assert(webPushConfig.response.status === 200 && webPushConfig.body.delivery === false, "Web Push config must report disabled delivery without VAPID secrets");
 
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const bootstrap = await request("/api/v1/auth/bootstrap", {
@@ -172,6 +175,11 @@ try {
     }),
   });
   assert(filePush.response.status === 201 && filePush.body.file_ref?.state === "ready", "file push failed");
+  const pendingDeliveries = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}/deliveries`, { headers: authA });
+  assert(pendingDeliveries.response.status === 200
+    && pendingDeliveries.body.length === 1
+    && pendingDeliveries.body[0].destination_device_id === linked.body.device.id
+    && pendingDeliveries.body[0].state === "pending", "file delivery ledger was not created as pending");
   const fileDelta = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(pageTwo.body.next_cursor)}`, { headers: authB });
   assert(fileDelta.response.status === 200 && fileDelta.body.items.some((item) => item.id === filePush.body.id), "device B did not cursor-sync the file push");
   const downloadTicket = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}/download-ticket`, { method: "POST", headers: authB });
@@ -180,8 +188,11 @@ try {
   assert(downloaded.status === 200 && downloaded.headers.get("content-disposition")?.startsWith("attachment"), "file download headers failed");
   const downloadedBytes = new Uint8Array(await downloaded.arrayBuffer());
   assert(createHash("sha256").update(downloadedBytes).digest("hex") === fileHash, "downloaded file bytes differ");
+  assert((await fetch(downloadTicket.body.download_url)).status === 410, "used download ticket did not return 410");
   const deletedFile = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}`, { method: "DELETE", headers: authA });
   assert(deletedFile.response.status === 200 && deletedFile.body.state === "deleted", "file delete failed");
+  const missedDeliveries = await request(`/api/v1/files/${encodeURIComponent(completed.body.id)}/deliveries`, { headers: authA });
+  assert(missedDeliveries.response.status === 200 && missedDeliveries.body[0].state === "missed", "unacknowledged delivery was not marked missed");
   assert((await fetch(downloadTicket.body.download_url)).status === 410, "deleted file download did not return 410");
 
   const root = await request("/");
@@ -189,9 +200,12 @@ try {
   const spa = await request("/settings/offline-check");
   assert(spa.response.status === 200 && String(spa.body).includes('id="root"'), "SPA fallback failed");
   const sw = await request("/sw.js");
-  assert(sw.response.status === 200 && String(sw.body).includes("CACHE_NAME"), "Service Worker asset was not served");
+  assert(sw.response.status === 200
+    && String(sw.body).includes("CACHE_NAME")
+    && String(sw.body).includes("acknowledgeFileDelivery")
+    && String(sw.body).includes("failed_retryable"), "Phase 3 Service Worker asset was not served");
 
-  console.log("Cloudflare local smoke passed: D1 migrations, private R2 File API, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker.");
+  console.log("Cloudflare local smoke passed: D1 migrations, private R2 File API, delivery ledger pending/missed transitions, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker ACK code.");
 } catch (error) {
   console.error(logs);
   throw error;

@@ -47,10 +47,22 @@ access_service_token_ids = []
 # Queue delivery is intentionally off for the low-cost MVP.
 enable_queue = false
 
+# Operational application budget. Do not substitute provider contract limits.
+storage_budget_bytes           = 8589934592
+storage_pressure_high_percent  = 95
+storage_cleanup_target_percent = 85
+# storage_monthly_byte_day_budget = 257698037760
+
 # Extra application configuration. These are not secrets.
 worker_plain_text_vars = {
   MAX_FILE_BYTES = "26214400"
 }
+
+# Phase 3 Web Push. Keep the private/data keys only in ignored tfvars.
+# vapid_public_key  = "<base64url 65-byte uncompressed P-256 public key>"
+# vapid_private_key = "<base64url 32-byte P-256 private key>"
+# vapid_subject     = "https://pushbridge-dev.<your-workers-subdomain>.workers.dev"
+# web_push_data_key = "<base64url 32-byte AES data key>"
 
 # Store values only in an uncommitted tfvars file or inject through CI.
 # These values are written to Terraform state, which must be protected.

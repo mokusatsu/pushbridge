@@ -1,16 +1,20 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import httpProxy from 'http-proxy';
 
 const host = process.env.LOCAL_GATEWAY_HOST || '127.0.0.1';
 const port = Number(process.env.LOCAL_GATEWAY_PORT || 4173);
 const target = process.env.API_PROXY_TARGET || 'http://127.0.0.1:8000';
-const distDir = resolve(process.cwd(), 'dist');
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const distDir = process.env.PWA_DIST_DIR
+  ? resolve(process.env.PWA_DIST_DIR)
+  : resolve(scriptDirectory, '..', '..', '..', 'infra', 'cloudflare', 'app', 'dist');
 
 if (!existsSync(join(distDir, 'index.html'))) {
-  console.error('dist/index.html がありません。先に npm run build を実行してください。');
+  console.error(`${distDir}/index.html がありません。先に npm run build を実行してください。`);
   process.exit(1);
 }
 

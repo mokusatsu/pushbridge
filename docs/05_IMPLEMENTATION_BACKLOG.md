@@ -9,22 +9,25 @@
 
 サイズは相対値`S/M/L/XL`であり、納期の約束ではない。
 
-## 2026-07-22 現在の実装状況
+## 2026-07-23 現在の実装状況
 
 | 項目 | 状態 |
 |---|---|
 | RP-001 モノレポ／共通check | 部分完了。React PWA、RelayMock、Cloudflare IaCを単一workspaceで検証可能 |
 | RP-002 Worker TypeScript化 | PoC完了。route／auth／response等を`worker/src`へ分割し、Terraform投入用bundleを再現可能に生成 |
-| RP-003 Cloudflare統合test | PoC完了。公式Workers Vitest poolでD1 migration、R2、DO、主要routeを13件検証 |
+| RP-003 Cloudflare統合test | PoC完了。公式Workers Vitest poolでD1 migration、R2、DO、Web Push、retention fault injectionと主要routeを18件検証 |
 | RP-201 Push作成と冪等性 | PoC完了。cross-user target拒否、UTF-8 byte上限、同一key 100回再送を統合test済み |
 | RP-202 cursor同期 | PoC完了。user／device／sessionに束縛した署名cursor、改変拒否、205件paginationを統合test済み |
 | RP-203 dismiss／pin／delete | PoC実装済み。保持期限cleanupは不足 |
 | RP-204 Link | PoC実装済み。安全なscheme検証を再確認する必要あり |
 | RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
 | RP-601〜605 Worker File／R2 | Phase 2 PoC実装済み。private R2 server-ticket、File Push、25 MiB境界、削除／410を統合test。presigned URL、暗号化、定期cleanupは未実装 |
-| RP-502〜503 Web Push | RelayMock subscriptionのみ。Worker配送とcached ACKは未実装 |
+| RP-502〜503 Web Push | Phase 3 source／local PoCとdev適用済み。subscription暗号化、VAPID、標準暗号、失効、限定retry、端末別ACKを検証。Access資格情報不足でChromium実配送は未完了 |
+| RP-501／504 PWA File UX | Phase 5 local実装済み。upload進捗／cancel／retry、送信側の配送待ち／通知済み／取得中／保存済み／再試行中／取得不可を契約APIから表示。Playwright desktop／mobile E2E合格。dev実Web Push E2Eは未完了 |
 
-Cloudflare devではTerraform、D1 migration 0001〜0004、TypeScript Worker bundle、PWA、Accessを適用済み。Service Auth経由のFile remote smokeも合格した。現在の優先順はWeb Push配送確認、端末別cached ACK、保持期限cleanupである。
+Cloudflare devではTerraform、D1 migration 0001〜0007、TypeScript Worker bundle、PWA、Web Push／retention binding、Accessを適用済み。Phase 2 Service Auth remote smoke、schema version 7、post-apply Plan差分なしを確認した。現在の優先順はAccess Service Token資格情報の再設定、実Web Push配送、PWA終了中のcached ACK実測、実Cron観測である。
+
+Phase 4はmigration 0006〜0007、D1起点の`delete_pending`状態機械、TTL／pressure削除、180日alias／7日tombstone、日次KiB-second履歴、R2／D1 fault recoveryまでlocal PoCとdev適用を完了。実Cron観測は未完了。
 
 ## Epic E0 — リポジトリと開発基盤
 

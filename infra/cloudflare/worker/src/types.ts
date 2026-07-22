@@ -10,6 +10,14 @@ export interface Env {
   ENABLE_DEV_BOOTSTRAP?: string;
   REQUIRE_DEV_BOOTSTRAP_TURNSTILE?: string;
   DEV_BOOTSTRAP_RATE_LIMIT?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
+  WEB_PUSH_DATA_KEY?: string;
+  STORAGE_BUDGET_BYTES?: string;
+  STORAGE_PRESSURE_HIGH_PERCENT?: string;
+  STORAGE_CLEANUP_TARGET_PERCENT?: string;
+  STORAGE_MONTHLY_BYTE_DAY_BUDGET?: string;
   TEST_MIGRATIONS?: Array<{ name: string; queries: string[] }>;
 }
 
@@ -85,4 +93,47 @@ export interface FileRow {
   r2_delete_attempts: number;
   r2_delete_retry_at: number | null;
   r2_delete_error_code: string | null;
+}
+
+export interface SubscriptionRow {
+  id: string;
+  user_id: string;
+  device_id: string;
+  endpoint_ciphertext: string | ArrayBuffer;
+  endpoint_hash: string;
+  endpoint_nonce: string;
+  p256dh_ciphertext: string | ArrayBuffer;
+  p256dh_nonce: string;
+  auth_ciphertext: string | ArrayBuffer;
+  auth_nonce: string;
+  storage_namespace: string | null;
+  local_cache_max_bytes: number | null;
+  consecutive_failures: number;
+  last_failure_code: string | null;
+  last_success_at: number | null;
+  created_at: number;
+  updated_at: number;
+  revoked_at: number | null;
+}
+
+export type FileDeliveryState = "pending" | "notified" | "fetching" | "cached" | "failed_retryable" | "missed";
+
+export interface FileDeliveryRow {
+  id: string;
+  user_id: string;
+  push_id: string;
+  file_id: string;
+  destination_device_id: string;
+  state: FileDeliveryState;
+  ack_token_hash: string | null;
+  ack_token_expires_at: number | null;
+  created_at: number;
+  updated_at: number;
+  notified_at: number | null;
+  fetching_at: number | null;
+  cached_at: number | null;
+  failed_at: number | null;
+  missed_at: number | null;
+  failure_code: string | null;
+  attempt_count: number;
 }

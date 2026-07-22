@@ -5,6 +5,11 @@ import { ApiError, parseApiProblem } from './errors';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const TRANSFER_TIMEOUT_MS = 120_000;
 
+export interface UploadOptions {
+  signal?: AbortSignal;
+  onProgress?: (loaded: number, total: number) => void;
+}
+
 function joinUrl(base: string, path: string): string {
   const cleanBase = base.replace(/\/+$/, '');
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
@@ -99,40 +104,62 @@ export class ApiClient {
     return this.fetchJson(this.resolveExternalUrl(url), init, timeoutMs);
   }
 
-  async upload(instruction: UploadInstruction, blob: Blob): Promise<void> {
+  async upload(instruction: UploadInstruction, blob: Blob, options: UploadOptions = {}): Promise<void> {
     const url = this.resolveExternalUrl(instruction.url);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), TRANSFER_TIMEOUT_MS);
     const target = new URL(url, window.location.href);
     const sameOrigin = target.origin === window.location.origin;
 
-    try {
-      const response = await fetch(url, {
-        method: instruction.method,
-        headers: instruction.headers,
-        body: blob,
-        credentials: sameOrigin ? 'include' : 'omit',
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const body = await parseResponseBody(response);
-        const parsed = parseApiProblem(body, response.status);
-        throw new ApiError(parsed.message || `ファイルのアップロードに失敗しました (${response.status})`, {
-          status: response.status,
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const abort = () => xhr.abort();
+      const finish = (callback: () => void) => {
+        options.signal?.removeEventListener('abort', abort);
+        callback();
+      };
+
+      xhr.open(instruction.method, url, true);
+      xhr.withCredentials = sameOrigin;
+      xhr.timeout = TRANSFER_TIMEOUT_MS;
+      for (const [name, value] of Object.entries(instruction.headers)) xhr.setRequestHeader(name, value);
+      xhr.upload.onprogress = (event) => {
+        const total = event.lengthComputable && event.total > 0 ? event.total : blob.size;
+        options.onProgress?.(Math.min(event.loaded, total), total);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          options.onProgress?.(blob.size, blob.size);
+          finish(resolve);
+          return;
+        }
+        let body: unknown = xhr.responseText || undefined;
+        if ((xhr.getResponseHeader('Content-Type') ?? '').includes('json') && xhr.responseText) {
+          try { body = JSON.parse(xhr.responseText); } catch { /* keep the response text */ }
+        }
+        const parsed = parseApiProblem(body, xhr.status);
+        finish(() => reject(new ApiError(parsed.message || `ファイルのアップロードに失敗しました (${xhr.status})`, {
+          status: xhr.status,
           code: parsed.code,
-          requestId: responseRequestId(response, parsed.requestId),
+          requestId: xhr.getResponseHeader('X-Request-ID') ?? parsed.requestId,
           problem: parsed.problem,
-        });
+        })));
+      };
+      xhr.onerror = () => finish(() => reject(new ApiError('ファイルのアップロード先へ接続できません。', { status: 0 })));
+      xhr.ontimeout = () => finish(() => reject(new ApiError('ファイルのアップロードがタイムアウトしました。', { status: 408 })));
+      xhr.onabort = () => finish(() => reject(new ApiError('ファイルのアップロードをキャンセルしました。', {
+        status: 0,
+        code: 'upload_cancelled',
+      })));
+
+      options.signal?.addEventListener('abort', abort, { once: true });
+      if (options.signal?.aborted) {
+        finish(() => reject(new ApiError('ファイルのアップロードをキャンセルしました。', {
+          status: 0,
+          code: 'upload_cancelled',
+        })));
+        return;
       }
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new ApiError('ファイルのアップロードがタイムアウトしました。', { status: 408, cause: error });
-      }
-      throw new ApiError('ファイルのアップロード先へ接続できません。', { status: 0, cause: error });
-    } finally {
-      window.clearTimeout(timeout);
-    }
+      xhr.send(blob);
+    });
   }
 
   async downloadBlob(value: string): Promise<Blob> {
