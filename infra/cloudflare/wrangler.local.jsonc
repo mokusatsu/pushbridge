@@ -49,6 +49,11 @@
     "ENABLE_DEV_BOOTSTRAP": "true",
     "REQUIRE_DEV_BOOTSTRAP_TURNSTILE": "false",
     "DEV_BOOTSTRAP_RATE_LIMIT": "20",
+    "PASSKEY_RP_ID": "localhost",
+    "PASSKEY_EXPECTED_ORIGINS": "[\"http://localhost:8787\"]",
+    "PASSKEY_RP_NAME": "Pushbridge Local",
+    "REQUIRE_PASSKEY_TURNSTILE": "false",
+    "AUTH_RATE_LIMIT": "20",
     "R2_BUCKET_NAME": "pushbridge-local-files",
     "FILE_RETENTION_POLICY": "{\"ttl/1d/\":172800,\"ttl/7d/\":691200,\"ttl/30d/\":2678400}"
   }

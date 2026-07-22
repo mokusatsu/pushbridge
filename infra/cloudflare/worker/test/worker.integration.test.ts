@@ -5,6 +5,7 @@ import { issueDeliveryToken } from "../src/deliveries";
 import { createWorker } from "../src/index";
 import type { Env } from "../src/types";
 import { base64UrlEncode } from "../src/crypto";
+import { sha256Hex } from "../src/crypto";
 import { deliverFilePush } from "../src/web-push";
 
 interface BootstrapResult {
@@ -109,6 +110,68 @@ async function uploadFile(uploadUrl: string, bytes: Uint8Array): Promise<Respons
 }
 
 describe("Worker runtime integration", () => {
+  it("issues one-use Passkey challenges with an explicit RP configuration", async () => {
+    const handle = unique("passkey");
+    const optionsResponse = await call("/api/v1/auth/passkeys/registration/options", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.210" },
+      body: JSON.stringify({ handle, device_name: "Passkey PWA", device_kind: "pwa" }),
+    });
+    expect(optionsResponse.status).toBe(200);
+    const options = await optionsResponse.json<{
+      challenge_id: string;
+      public_key: { rp: { id: string }; user: { name: string }; authenticatorSelection: { residentKey: string; userVerification: string } };
+    }>();
+    expect(options.public_key.rp.id).toBe("worker.test");
+    expect(options.public_key.user.name).toBe(handle);
+    expect(options.public_key.authenticatorSelection).toMatchObject({ residentKey: "required", userVerification: "required" });
+    const stored = await env.DB.prepare("SELECT challenge, consumed_at FROM auth_challenges WHERE id = ?")
+      .bind(options.challenge_id).first<{ challenge: string; consumed_at: number | null }>();
+    expect(stored).toMatchObject({ challenge: expect.any(String), consumed_at: null });
+
+    const invalid = await call("/api/v1/auth/passkeys/registration/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: options.challenge_id, credential: {} }),
+    });
+    expect(invalid.status).toBe(400);
+    expect((await invalid.json<{ detail: { code: string } }>()).detail.code).toBe("passkey_verification_failed");
+    const replay = await call("/api/v1/auth/passkeys/registration/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge_id: options.challenge_id, credential: {} }),
+    });
+    expect(replay.status).toBe(400);
+    expect((await replay.json<{ detail: { code: string } }>()).detail.code).toBe("invalid_challenge");
+  });
+
+  it("supports cookie sessions while enforcing exact Origin and CSRF on mutations", async () => {
+    const bearer = await bootstrap("198.51.100.211");
+    const token = `browser_${unique("token")}`;
+    const csrf = `csrf_${unique("token")}`;
+    const now = Date.now();
+    await env.DB.prepare(`INSERT INTO sessions
+      (token_hash, user_id, device_id, created_at, expires_at, session_kind, session_id, csrf_token_hash, last_seen_at, idle_expires_at, absolute_expires_at)
+      VALUES (?, ?, ?, ?, ?, 'browser', ?, ?, ?, ?, ?)`)
+      .bind(await sha256Hex(token), bearer.user.id, bearer.device.id, now, now + 60_000, unique("ses"), await sha256Hex(csrf), now, now + 60_000, now + 120_000).run();
+    const cookie = { cookie: `__Host-pushbridge_session=${token}` };
+    expect((await call("/api/v1/devices", { headers: cookie })).status).toBe(200);
+
+    const linkBody = JSON.stringify({ name: "Cookie peer", kind: "pwa" });
+    expect((await call("/api/v1/devices/link", { method: "POST", headers: { ...cookie, "content-type": "application/json" }, body: linkBody })).status).toBe(403);
+    expect((await call("/api/v1/devices/link", { method: "POST", headers: { ...cookie, origin: "https://evil.test", "x-csrf-token": csrf, "content-type": "application/json" }, body: linkBody })).status).toBe(403);
+    expect((await call("/api/v1/devices/link", { method: "POST", headers: { ...cookie, origin: "https://worker.test", "content-type": "application/json" }, body: linkBody })).status).toBe(403);
+    expect((await call("/api/v1/devices/link", { method: "POST", headers: { ...cookie, origin: "https://worker.test", "x-csrf-token": csrf, "content-type": "application/json" }, body: linkBody })).status).toBe(201);
+
+    const sessions = await call("/api/v1/auth/sessions", { headers: cookie });
+    expect(sessions.status).toBe(200);
+    expect(await sessions.json<Array<{ current: boolean }>>()).toContainEqual(expect.objectContaining({ current: true }));
+    const logout = await call("/api/v1/auth/logout", { method: "POST", headers: { ...cookie, origin: "https://worker.test", "x-csrf-token": csrf } });
+    expect(logout.status).toBe(204);
+    expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect((await call("/api/v1/devices", { headers: cookie })).status).toBe(401);
+  });
+
   it("uses D1, R2, and Durable Object bindings", async () => {
     const health = await call("/healthz");
     expect(health.status).toBe(200);

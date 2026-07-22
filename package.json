@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "node scripts/check-all.mjs",
-    "worker:build": "esbuild infra/cloudflare/worker/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=infra/cloudflare/worker/index.mjs --sourcemap=external --sources-content=false",
+    "worker:build": "esbuild infra/cloudflare/worker/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=infra/cloudflare/worker/index.mjs --sourcemap=external --sources-content=false --legal-comments=none",
     "worker:typecheck": "tsc -p infra/cloudflare/worker/tsconfig.json --noEmit",
     "worker:test": "vitest run --config infra/cloudflare/worker/vitest.config.ts",
     "worker:check": "npm run worker:build && npm run worker:typecheck && npm run worker:test",
@@ -15,6 +15,7 @@
     "cloudflare:local:migrate": "npx --yes wrangler@4 d1 migrations apply DB --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler",
     "cloudflare:local:dev": "npx --yes wrangler@4 dev --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler --ip 127.0.0.1 --port 8787",
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",
+    "cloudflare:local:passkey-e2e": "node scripts/cloudflare-passkey-e2e.mjs",
     "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs",
     "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"
   },
@@ -27,5 +28,8 @@
     "esbuild": "^0.28.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.0"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "13.3.2"
   }
 }

@@ -12,24 +12,65 @@ interface SessionRow {
   session_revoked_at: number | null;
   device_revoked_at: number | null;
   user_deleted_at: number | null;
+  session_kind: "bearer" | "browser";
+  csrf_token_hash: string | null;
+  idle_expires_at: number | null;
+  absolute_expires_at: number | null;
+}
+
+function cookieValue(request: Request, name: string): string | null {
+  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key === name) return value.join("=") || null;
+  }
+  return null;
+}
+
+function allowedCookieOrigins(env: Env): string[] {
+  if (!env.PASSKEY_EXPECTED_ORIGINS) return [];
+  try {
+    const parsed = JSON.parse(env.PASSKEY_EXPECTED_ORIGINS) as unknown;
+    if (Array.isArray(parsed)) return parsed.filter((value): value is string => typeof value === "string");
+  } catch {
+    return env.PASSKEY_EXPECTED_ORIGINS.split(",").map((value) => value.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 export async function authenticate(request: Request, env: Env, requestId: string, runtime: Runtime): Promise<AuthContext> {
   const header = request.headers.get("authorization") ?? "";
-  if (!header.startsWith("Bearer ") || header.length <= 7) {
-    throw problem(401, "unauthorized", "A valid bearer token is required.", requestId, { "www-authenticate": "Bearer" });
-  }
-  const tokenHash = await sha256Hex(header.slice(7));
+  const bearer = header.startsWith("Bearer ") && header.length > 7 ? header.slice(7) : null;
+  const cookie = cookieValue(request, "__Host-pushbridge_session");
+  const token = bearer ?? cookie;
+  if (!token) throw problem(401, "unauthorized", "A valid bearer token or browser session is required.", requestId, { "www-authenticate": "Bearer" });
+  const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(`
     SELECT s.user_id, s.device_id, s.expires_at, s.revoked_at AS session_revoked_at,
+      s.session_kind, s.csrf_token_hash, s.idle_expires_at, s.absolute_expires_at,
       u.handle, u.deleted_at AS user_deleted_at, d.revoked_at AS device_revoked_at
     FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
     WHERE s.token_hash = ?
   `).bind(tokenHash).first<SessionRow>();
-  if (!row || row.session_revoked_at != null || row.device_revoked_at != null || row.user_deleted_at != null || Number(row.expires_at) <= runtime.now()) {
+  if (!row || row.session_revoked_at != null || row.device_revoked_at != null || row.user_deleted_at != null
+    || Number(row.expires_at) <= runtime.now() || (row.absolute_expires_at != null && Number(row.absolute_expires_at) <= runtime.now())) {
     throw problem(401, "unauthorized", "The bearer token is expired, revoked, or invalid.", requestId, { "www-authenticate": "Bearer" });
   }
-  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: tokenHash };
+  const authMethod = bearer ? "bearer" : "cookie";
+  if (authMethod === "cookie") {
+    if (row.session_kind !== "browser") throw problem(401, "unauthorized", "The browser session is invalid.", requestId);
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      const origin = request.headers.get("origin");
+      if (!origin || !allowedCookieOrigins(env).includes(origin)) throw problem(403, "invalid_origin", "The request Origin is not allowed.", requestId);
+      const csrf = request.headers.get("x-csrf-token");
+      if (!csrf || !row.csrf_token_hash || await sha256Hex(csrf) !== row.csrf_token_hash) {
+        throw problem(403, "csrf_failed", "A valid CSRF token is required.", requestId);
+      }
+    }
+    const nextIdle = Math.min(runtime.now() + 7 * 24 * 60 * 60 * 1000, Number(row.absolute_expires_at));
+    await env.DB.prepare("UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?, expires_at = ? WHERE token_hash = ?")
+      .bind(runtime.now(), nextIdle, nextIdle, tokenHash).run();
+  }
+  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: tokenHash, session_token_hash: tokenHash, auth_method: authMethod };
 }
 
 async function consumeBootstrapAttempt(request: Request, env: Env, requestId: string, runtime: Runtime): Promise<Response | null> {

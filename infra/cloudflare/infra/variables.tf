@@ -107,6 +107,54 @@ variable "dev_bootstrap_rate_limit" {
   }
 }
 
+variable "passkey_rp_id" {
+  description = "Explicit WebAuthn relying-party ID. Leave null until the production/custom hostname decision is made."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.passkey_rp_id == null || can(regex("^[A-Za-z0-9.-]+$", var.passkey_rp_id))
+    error_message = "passkey_rp_id must be a hostname without a scheme, port, or path."
+  }
+}
+
+variable "passkey_expected_origins" {
+  description = "Exact HTTPS origins accepted for WebAuthn and cookie-session CSRF checks. Localhost HTTP is only for local development."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for origin in var.passkey_expected_origins : can(regex("^https://[^/]+$", origin))
+    ])
+    error_message = "passkey_expected_origins must contain exact HTTPS origins without a trailing slash."
+  }
+}
+
+variable "passkey_rp_name" {
+  description = "User-visible WebAuthn relying-party name."
+  type        = string
+  default     = "Pushbridge"
+}
+
+variable "require_passkey_turnstile" {
+  description = "Require Turnstile before issuing public Passkey registration options. Production defaults to enforcement in Worker code unless explicitly disabled."
+  type        = bool
+  default     = true
+}
+
+variable "auth_rate_limit" {
+  description = "Maximum Passkey option requests per source IP and action in a ten-minute window."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.auth_rate_limit >= 1 && var.auth_rate_limit <= 100
+    error_message = "auth_rate_limit must be between 1 and 100."
+  }
+}
+
 variable "access_ip_allowlist" {
   description = "Optional Cloudflare Access application that restricts the complete Worker hostname, including Static Assets, to source IP CIDRs. Set to null to disable."
   type = object({

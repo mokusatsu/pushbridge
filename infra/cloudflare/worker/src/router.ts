@@ -2,6 +2,15 @@ import { authenticate, bootstrap } from "./auth";
 import { currentDevice, linkDevice, listDevices, mutateDevice } from "./devices";
 import { handlePublicDeliveryRoute, listFileDeliveries } from "./deliveries";
 import { handleFileRoute, handlePublicFileRoute, storageUsage } from "./files";
+import {
+  authenticationOptions,
+  authenticationVerify,
+  listBrowserSessions,
+  logoutBrowserSession,
+  registrationOptions,
+  registrationVerify,
+  revokeBrowserSession,
+} from "./passkeys";
 import { createPush, getPush, listPushes, mutatePush } from "./pushes";
 import { getRequestId, json, problem } from "./response";
 import { handleSubscriptionRoute, webPushConfig } from "./subscriptions";
@@ -39,9 +48,17 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(env, requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/auth/passkeys/registration/options") return registrationOptions(request, env, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/auth/passkeys/registration/verify") return registrationVerify(request, env, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/auth/passkeys/authentication/options") return authenticationOptions(request, env, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/auth/passkeys/authentication/verify") return authenticationVerify(request, env, requestId, runtime);
       if (!path.startsWith("/v1/")) return problem(404, "not_found", "Endpoint not found.", requestId);
 
       const auth = await authenticate(request, env, requestId, runtime);
+      if (request.method === "GET" && path === "/v1/auth/sessions") return listBrowserSessions(env, auth, requestId);
+      if (request.method === "POST" && path === "/v1/auth/logout") return logoutBrowserSession(env, auth, requestId, runtime);
+      const sessionMatch = path.match(/^\/v1\/auth\/sessions\/([^/]+)$/);
+      if (sessionMatch && request.method === "DELETE") return revokeBrowserSession(decodeURIComponent(sessionMatch[1]), env, auth, requestId, runtime);
       if (request.method === "GET" && path === "/v1/devices") return json(await listDevices(env, auth), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/devices/me") return json(await currentDevice(env, auth), { headers: { "x-request-id": requestId } });
       if (request.method === "POST" && path === "/v1/devices/link") return linkDevice(request, env, auth, requestId, runtime);

@@ -3,6 +3,7 @@ import type { AuthMode, ClientSettings } from './types';
 const SETTINGS_KEY = 'pushbridge.client-settings.v2';
 const SESSION_TOKEN_KEY = 'pushbridge.bearer-token.session.v2';
 const LOCAL_TOKEN_KEY = 'pushbridge.bearer-token.local.v2';
+const CSRF_TOKEN_KEY = 'pushbridge.csrf-token.session.v1';
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -18,7 +19,7 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return value !== 'false' && value !== '0';
 }
 
-const defaults: Omit<ClientSettings, 'bearerToken'> = {
+const defaults: Omit<ClientSettings, 'bearerToken' | 'csrfToken'> = {
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL || '/api/v1',
   realtimePath: import.meta.env.VITE_REALTIME_PATH || '/realtime',
   authMode: normalizeAuthMode(import.meta.env.VITE_AUTH_MODE),
@@ -47,11 +48,11 @@ function safeSessionStorage(): Storage | undefined {
 }
 
 export function loadClientSettings(): ClientSettings {
-  let persisted: Partial<Omit<ClientSettings, 'bearerToken'>> = {};
+  let persisted: Partial<Omit<ClientSettings, 'bearerToken' | 'csrfToken'>> = {};
   const raw = safeLocalStorage()?.getItem(SETTINGS_KEY);
   if (raw) {
     try {
-      persisted = JSON.parse(raw) as Partial<Omit<ClientSettings, 'bearerToken'>>;
+      persisted = JSON.parse(raw) as Partial<Omit<ClientSettings, 'bearerToken' | 'csrfToken'>>;
     } catch {
       persisted = {};
     }
@@ -71,25 +72,29 @@ export function loadClientSettings(): ClientSettings {
     autoCacheReceivedFiles: persisted.autoCacheReceivedFiles ?? defaults.autoCacheReceivedFiles,
     localFileCacheMaxBytes: Math.max(0, persisted.localFileCacheMaxBytes ?? defaults.localFileCacheMaxBytes),
     bearerToken,
+    csrfToken: safeSessionStorage()?.getItem(CSRF_TOKEN_KEY) ?? '',
   };
 }
 
 export function saveClientSettings(settings: ClientSettings): void {
-  const { bearerToken, ...persisted } = settings;
+  const { bearerToken, csrfToken, ...persisted } = settings;
   safeLocalStorage()?.setItem(SETTINGS_KEY, JSON.stringify(persisted));
   safeLocalStorage()?.removeItem(LOCAL_TOKEN_KEY);
   safeSessionStorage()?.removeItem(SESSION_TOKEN_KEY);
+  safeSessionStorage()?.removeItem(CSRF_TOKEN_KEY);
 
   if (bearerToken) {
     if (settings.rememberBearerToken) safeLocalStorage()?.setItem(LOCAL_TOKEN_KEY, bearerToken);
     else safeSessionStorage()?.setItem(SESSION_TOKEN_KEY, bearerToken);
   }
+  if (settings.authMode === 'cookie' && csrfToken) safeSessionStorage()?.setItem(CSRF_TOKEN_KEY, csrfToken);
 }
 
 export function clearClientSettings(): void {
   safeLocalStorage()?.removeItem(SETTINGS_KEY);
   safeLocalStorage()?.removeItem(LOCAL_TOKEN_KEY);
   safeSessionStorage()?.removeItem(SESSION_TOKEN_KEY);
+  safeSessionStorage()?.removeItem(CSRF_TOKEN_KEY);
 }
 
 export function applicationVersion(): string {

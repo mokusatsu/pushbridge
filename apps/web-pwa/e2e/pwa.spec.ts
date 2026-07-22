@@ -179,7 +179,13 @@ test('service worker exposes and applies a real byte-level update @desktop', asy
   const original = await readFile(serviceWorkerPath, 'utf8');
   try {
     await page.goto(`${origin}/#/timeline`);
-    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await expect.poll(async () => {
+      try {
+        return await page.evaluate(() => Boolean(navigator.serviceWorker.controller));
+      } catch {
+        return false;
+      }
+    }).toBe(true);
     await writeFile(serviceWorkerPath, `${original}\n// playwright-update-${Date.now()}\n`, 'utf8');
     await page.evaluate(async () => {
       const registration = await navigator.serviceWorker.getRegistration('/');

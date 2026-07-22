@@ -8,6 +8,14 @@ enable_dev_bootstrap            = false
 require_dev_bootstrap_turnstile = false
 dev_bootstrap_rate_limit        = 20
 
+# Passkeys stay disabled until an explicit RP hostname and exact HTTPS origin
+# are selected. Do not copy workers.dev/custom hostnames here by assumption.
+# passkey_rp_id              = "push.example.com"
+# passkey_expected_origins   = ["https://push.example.com"]
+passkey_rp_name             = "Pushbridge"
+require_passkey_turnstile   = true
+auth_rate_limit             = 20
+
 # Protect the complete hostname (Worker API and Static Assets) with Cloudflare
 # Access. Use /32 for one IPv4 address. Set access_ip_allowlist = null to disable.
 access_ip_allowlist = {

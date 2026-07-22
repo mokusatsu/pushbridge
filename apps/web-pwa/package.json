@@ -21,6 +21,7 @@
     "check:evidence": "node tools/check-browser-evidence.mjs"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "13.3.0",
     "idb": "^8.0.3",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

@@ -143,6 +143,8 @@ export interface FeatureCapabilities {
   e2ee: boolean;
   direct_upload: boolean;
   device_registration: boolean;
+  passkey_authentication: boolean;
+  browser_cookie_sessions: boolean;
 }
 
 export interface LimitCapabilities {
@@ -280,6 +282,7 @@ export interface ClientSettings {
   realtimePath: string;
   authMode: AuthMode;
   bearerToken: string;
+  csrfToken?: string;
   rememberBearerToken: boolean;
   currentDeviceId: string;
   storageNamespace: string;

@@ -46,7 +46,7 @@ export function DevicesPage() {
         actions={<button className="button button-secondary" type="button" onClick={() => void runtime.syncNow(true)}><Icon name="refresh" size={17} />更新</button>}
       />
 
-      {snapshot.capabilities?.features.device_registration && runtime.settings.bearerToken && (
+      {snapshot.capabilities?.features.device_registration && (runtime.settings.authMode === 'cookie' || runtime.settings.bearerToken) && (
         <section className="section-card registration-card">
           <div>
             <span className="page-eyebrow">LINK DEVICE</span>

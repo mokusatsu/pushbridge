@@ -36,6 +36,14 @@ locals {
     STORAGE_BUDGET_BYTES            = tostring(var.storage_budget_bytes)
     STORAGE_PRESSURE_HIGH_PERCENT   = tostring(var.storage_pressure_high_percent)
     STORAGE_CLEANUP_TARGET_PERCENT  = tostring(var.storage_cleanup_target_percent)
+    PASSKEY_RP_NAME                 = var.passkey_rp_name
+    REQUIRE_PASSKEY_TURNSTILE       = tostring(var.require_passkey_turnstile)
+    AUTH_RATE_LIMIT                 = tostring(var.auth_rate_limit)
+  }
+
+  passkey_plain_text_vars = var.passkey_rp_id == null ? {} : {
+    PASSKEY_RP_ID            = var.passkey_rp_id
+    PASSKEY_EXPECTED_ORIGINS = jsonencode(sort(tolist(var.passkey_expected_origins)))
   }
 
   storage_allowance_vars = var.storage_monthly_byte_day_budget == null ? {} : {
@@ -56,6 +64,7 @@ locals {
     var.worker_plain_text_vars,
     local.web_push_plain_text_vars,
     local.storage_allowance_vars,
+    local.passkey_plain_text_vars,
     local.reserved_plain_text_vars
   )
 

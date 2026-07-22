@@ -70,6 +70,8 @@ const relayMockCapabilities: SystemCapabilities = {
     e2ee: false,
     direct_upload: true,
     device_registration: true,
+    passkey_authentication: false,
+    browser_cookie_sessions: false,
   },
   limits: {
     max_file_bytes: 25 * 1024 * 1024,

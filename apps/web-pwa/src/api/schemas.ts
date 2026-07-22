@@ -310,6 +310,8 @@ const capabilitiesWireSchema = z.object({
     e2ee: z.boolean().default(false),
     direct_upload: z.boolean().default(true),
     device_registration: z.boolean().default(true),
+    passkey_authentication: z.boolean().default(false),
+    browser_cookie_sessions: z.boolean().default(false),
   }).passthrough(),
   limits: z.object({
     max_file_bytes: z.number().nonnegative().default(25 * 1024 * 1024),
@@ -337,6 +339,8 @@ export const capabilitiesSchema = capabilitiesWireSchema.transform((value): Syst
     e2ee: value.features.e2ee,
     direct_upload: value.features.direct_upload,
     device_registration: value.features.device_registration,
+    passkey_authentication: value.features.passkey_authentication,
+    browser_cookie_sessions: value.features.browser_cookie_sessions,
   },
   limits: {
     max_file_bytes: value.limits.max_file_bytes,

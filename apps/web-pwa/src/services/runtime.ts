@@ -576,7 +576,8 @@ export class AppRuntime {
         this.api.getCapabilities(),
         this.api.getWebPushConfig(),
       ]);
-      const authenticated = this.settings.authMode === 'bearer' && Boolean(this.settings.bearerToken);
+      const authenticated = this.settings.authMode === 'cookie'
+        || (this.settings.authMode === 'bearer' && Boolean(this.settings.bearerToken));
       const [currentDevice, webPushSubscriptions] = authenticated
         ? await Promise.all([
             this.api.getCurrentDevice(),
@@ -607,7 +608,7 @@ export class AppRuntime {
     try {
       const support = webPushSupport();
       if (!support.supported) throw new Error(support.reason);
-      if (!this.settings.bearerToken) throw new Error('Web Push Subscriptionの登録には端末Bearer Tokenが必要です。');
+      if (this.settings.authMode !== 'cookie' && !this.settings.bearerToken) throw new Error('Web Push Subscriptionの登録には認証が必要です。');
 
       const config = this.snapshot.webPushConfig ?? await this.api.getWebPushConfig();
       if (!config?.subscription_registration) throw new Error('接続先APIはWeb Push Subscription登録を提供していません。');

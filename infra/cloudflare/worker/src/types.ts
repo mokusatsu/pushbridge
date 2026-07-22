@@ -10,6 +10,11 @@ export interface Env {
   ENABLE_DEV_BOOTSTRAP?: string;
   REQUIRE_DEV_BOOTSTRAP_TURNSTILE?: string;
   DEV_BOOTSTRAP_RATE_LIMIT?: string;
+  PASSKEY_RP_ID?: string;
+  PASSKEY_EXPECTED_ORIGINS?: string;
+  PASSKEY_RP_NAME?: string;
+  REQUIRE_PASSKEY_TURNSTILE?: string;
+  AUTH_RATE_LIMIT?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
@@ -26,6 +31,8 @@ export interface AuthContext {
   device_id: string;
   handle: string;
   cursor_key: string;
+  session_token_hash: string;
+  auth_method: "bearer" | "cookie";
 }
 
 export interface Runtime {

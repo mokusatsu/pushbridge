@@ -81,6 +81,20 @@ describe('ApiClient', () => {
     });
   });
 
+  it('adds CSRF only to unsafe cookie-session requests', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ApiClient({ ...settings, authMode: 'cookie', bearerToken: '', csrfToken: 'csrf-test' });
+    await client.request('/probe');
+    await client.request('/probe', { method: 'POST', body: '{}' });
+    expect((fetchMock.mock.calls[0]![1]?.headers as Headers).get('X-CSRF-Token')).toBeNull();
+    expect((fetchMock.mock.calls[1]![1]?.headers as Headers).get('X-CSRF-Token')).toBe('csrf-test');
+    expect((fetchMock.mock.calls[1]![1]?.headers as Headers).get('Authorization')).toBeNull();
+  });
+
   it('reports upload progress through XMLHttpRequest', async () => {
     class SuccessfulUpload {
       status = 204;

@@ -6,6 +6,7 @@ import { clearClientSettings, saveClientSettings } from '@/config';
 import { Icon } from '@/components/Icon';
 import { PageHeader } from '@/components/PageHeader';
 import { webPushSupport } from '@/services/webPush';
+import { authenticatePasskey, passkeysSupported, registerPasskey } from '@/services/passkeys';
 import { useAppRuntime, useAppSnapshot } from '@/state/AppContext';
 import type { AuthMode, ClientSettings, WebPushSubscriptionRecord } from '@/types';
 import { formatBytes, formatDateTime } from '@/utils/format';
@@ -43,8 +44,10 @@ export function SettingsPage() {
   const [bootstrapHandle, setBootstrapHandle] = useState('local-user');
   const [bootstrapDeviceName, setBootstrapDeviceName] = useState(() => `PWA ${navigator.platform || 'Browser'}`);
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [webPushBusy, setWebPushBusy] = useState(false);
   const pushSupport = webPushSupport();
+  const passkeyBrowserSupported = passkeysSupported();
 
   const update = <K extends keyof ClientSettings>(key: K, value: ClientSettings[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -124,7 +127,7 @@ export function SettingsPage() {
         api.getCapabilities(),
         api.getWebPushConfig(),
       ]);
-      const device = form.authMode === 'bearer' && form.bearerToken
+      const device = form.authMode === 'cookie' || (form.authMode === 'bearer' && form.bearerToken)
         ? await api.getCurrentDevice()
         : undefined;
       runtime.notify('success', device
@@ -135,6 +138,49 @@ export function SettingsPage() {
     } finally {
       setTesting(false);
     }
+  };
+
+  const passkeyApi = () => new ApiClient({ ...normalizedSettings(), authMode: 'none', bearerToken: '', csrfToken: '' });
+
+  const createPasskeyAccount = async () => {
+    setFormError('');
+    if (!passkeyBrowserSupported) { setFormError('このブラウザーはPasskeyに対応していません。'); return; }
+    if (!/^[A-Za-z0-9_.-]{1,80}$/.test(bootstrapHandle.trim()) || !bootstrapDeviceName.trim()) {
+      setFormError('有効なHandleと端末名を入力してください。'); return;
+    }
+    setPasskeyBusy(true);
+    try {
+      const result = await registerPasskey(passkeyApi(), { handle: bootstrapHandle.trim(), device_name: bootstrapDeviceName.trim() });
+      if (!result.user || !result.device) throw new Error('Passkey登録応答にユーザーまたは端末がありません。');
+      saveClientSettings({
+        ...normalizedSettings(), authMode: 'cookie', bearerToken: '', csrfToken: result.csrf_token,
+        currentDeviceId: result.device.id, storageNamespace: safeNamespace(`pushbridge-${result.user.id}`),
+      });
+      window.location.reload();
+    } catch (error) { setFormError(apiErrorMessage(error)); } finally { setPasskeyBusy(false); }
+  };
+
+  const loginWithPasskey = async () => {
+    setFormError('');
+    if (!passkeyBrowserSupported) { setFormError('このブラウザーはPasskeyに対応していません。'); return; }
+    setPasskeyBusy(true);
+    try {
+      const result = await authenticatePasskey(passkeyApi(), bootstrapHandle.trim() || undefined);
+      const cookieSettings: ClientSettings = { ...normalizedSettings(), authMode: 'cookie', bearerToken: '', csrfToken: result.csrf_token };
+      const device = await new LocalApi(new ApiClient(cookieSettings)).getCurrentDevice();
+      saveClientSettings({ ...cookieSettings, currentDeviceId: device.id });
+      window.location.reload();
+    } catch (error) { setFormError(apiErrorMessage(error)); } finally { setPasskeyBusy(false); }
+  };
+
+  const logoutPasskey = async () => {
+    setPasskeyBusy(true);
+    setFormError('');
+    try {
+      await new ApiClient(normalizedSettings()).request('/auth/logout', { method: 'POST' });
+      clearClientSettings();
+      window.location.reload();
+    } catch (error) { setFormError(apiErrorMessage(error)); } finally { setPasskeyBusy(false); }
   };
 
   const requestNotifications = async () => {
@@ -170,7 +216,7 @@ export function SettingsPage() {
 
   const canRegisterWebPush = Boolean(
     pushSupport.supported
-    && runtime.settings.bearerToken
+    && (runtime.settings.authMode === 'cookie' || runtime.settings.bearerToken)
     && snapshot.capabilities?.features.web_push_subscription_registration
     && snapshot.webPushConfig?.subscription_registration,
   );
@@ -183,7 +229,22 @@ export function SettingsPage() {
         description="Web/PWAは同一オリジンの /api/v1 を呼び、開発プロキシがRelayMockの /v1 へ変換します。"
       />
 
-      {!runtime.settings.bearerToken && (
+      {runtime.settings.authMode !== 'cookie' && !runtime.settings.bearerToken && (
+        <>
+        {snapshot.capabilities?.features.passkey_authentication && (
+          <section className="section-card settings-form passkey-auth">
+            <div className="section-heading"><div><span className="page-eyebrow">PASSKEY</span><h2>Passkeyで安全に接続</h2></div><span className="status-chip">正式認証</span></div>
+            <p className="muted-copy">秘密鍵は端末のAuthenticatorから外へ出ません。ブラウザーセッションはHttpOnly Cookie、変更操作はCSRF tokenで保護されます。</p>
+            <div className="form-grid two-columns">
+              <label className="field"><span>Handle</span><input value={bootstrapHandle} onChange={(event) => setBootstrapHandle(event.target.value)} maxLength={80} autoComplete="username webauthn" /></label>
+              <label className="field"><span>この端末の名前</span><input value={bootstrapDeviceName} onChange={(event) => setBootstrapDeviceName(event.target.value)} maxLength={100} /></label>
+            </div>
+            <div className="settings-actions align-start">
+              <button className="button button-primary" type="button" disabled={passkeyBusy || !passkeyBrowserSupported} onClick={() => void loginWithPasskey()}>{passkeyBusy ? '確認中…' : 'Passkeyでログイン'}</button>
+              <button className="button button-secondary" type="button" disabled={passkeyBusy || !passkeyBrowserSupported} onClick={() => void createPasskeyAccount()}>新規Passkeyを登録</button>
+            </div>
+          </section>
+        )}
         <section className="section-card settings-form relaymock-bootstrap">
           <div className="section-heading"><div><span className="page-eyebrow">FIRST CONNECTION</span><h2>RelayMockをBootstrap</h2></div><span className="status-chip">開発専用</span></div>
           <p className="muted-copy">ユーザー、現在のPWA端末、端末スコープのBearer Tokenを一括作成します。この操作は外部公開環境では使用しないでください。</p>
@@ -200,6 +261,15 @@ export function SettingsPage() {
           <div className="settings-actions align-start">
             <button className="button button-primary" type="button" disabled={bootstrapping} onClick={() => void bootstrap()}><Icon name="devices" size={17} />{bootstrapping ? '作成中…' : 'アカウントと端末を作成'}</button>
           </div>
+        </section>
+        </>
+      )}
+
+      {runtime.settings.authMode === 'cookie' && (
+        <section className="section-card settings-form passkey-auth">
+          <div className="section-heading"><div><span className="page-eyebrow">PASSKEY SESSION</span><h2>ブラウザーセッション</h2></div><span className="status-chip">接続中</span></div>
+          <p className="muted-copy">認証CookieはJavaScriptから読み取れません。CSRF tokenはこのタブのsessionStorageだけに保持します。</p>
+          <div className="settings-actions align-start"><button className="button button-secondary" type="button" disabled={passkeyBusy} onClick={() => void logoutPasskey()}>ログアウト</button></div>
         </section>
       )}
 
@@ -231,7 +301,7 @@ export function SettingsPage() {
             <select value={form.authMode} onChange={(event) => update('authMode', event.target.value as AuthMode)}>
               <option value="bearer">Bearer Token（RelayMock）</option>
               <option value="none">認証なし（Health／Bootstrap用）</option>
-              <option value="cookie">Cookie（将来用）</option>
+              <option value="cookie">Passkey / HttpOnly Cookie</option>
             </select>
           </label>
           <label className="field">

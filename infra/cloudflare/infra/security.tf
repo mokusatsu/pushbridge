@@ -13,3 +13,13 @@ resource "cloudflare_turnstile_widget" "registration" {
     }
   }
 }
+
+check "passkey_configuration" {
+  assert {
+    condition = (
+      (var.passkey_rp_id == null && length(var.passkey_expected_origins) == 0) ||
+      (var.passkey_rp_id != null && length(var.passkey_expected_origins) > 0)
+    )
+    error_message = "Passkeys require both passkey_rp_id and at least one exact passkey_expected_origin; leave both unset to keep the feature disabled."
+  }
+}

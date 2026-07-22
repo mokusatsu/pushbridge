@@ -22,6 +22,8 @@ export function capabilities(env: Env): Record<string, unknown> {
       e2ee: false,
       direct_upload: false,
       device_registration: true,
+      passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
+      browser_cookie_sessions: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
     },
     limits: {
       max_file_bytes: 26_214_400,

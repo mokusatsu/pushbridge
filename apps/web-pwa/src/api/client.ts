@@ -58,6 +58,10 @@ export class ApiClient {
     if (this.settings.authMode === 'bearer' && this.settings.bearerToken) {
       headers.set('Authorization', `Bearer ${this.settings.bearerToken}`);
     }
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (this.settings.authMode === 'cookie' && this.settings.csrfToken && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      headers.set('X-CSRF-Token', this.settings.csrfToken);
+    }
 
     try {
       const response = await fetch(url, {
