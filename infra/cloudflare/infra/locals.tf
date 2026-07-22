@@ -39,6 +39,8 @@ locals {
     PASSKEY_RP_NAME                 = var.passkey_rp_name
     REQUIRE_PASSKEY_TURNSTILE       = tostring(var.require_passkey_turnstile)
     AUTH_RATE_LIMIT                 = tostring(var.auth_rate_limit)
+    ACCOUNT_AUTH_RATE_LIMIT         = tostring(var.account_auth_rate_limit)
+    DEVICE_MUTATION_RATE_LIMIT      = tostring(var.device_mutation_rate_limit)
   }
 
   passkey_plain_text_vars = var.passkey_rp_id == null ? {} : {

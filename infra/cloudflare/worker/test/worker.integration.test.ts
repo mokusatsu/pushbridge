@@ -111,6 +111,30 @@ async function uploadFile(uploadUrl: string, bytes: Uint8Array): Promise<Respons
 
 describe("Worker runtime integration", () => {
   it("issues one-use Passkey challenges with an explicit RP configuration", async () => {
+    const config = await call("/api/v1/auth/config");
+    expect(config.status).toBe(200);
+    expect(await config.json()).toEqual({
+      passkey_enabled: true,
+      rp_name: "Pushbridge Test",
+      turnstile_required: false,
+      turnstile_site_key: null,
+    });
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (request: Request<unknown, any>, workerEnv: Env, ctx: ExecutionContext) => Promise<Response>;
+    const optionsRequest = request("/api/v1/auth/passkeys/registration/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handle: unique("bad_rp"), device_name: "Bad RP" }),
+    });
+    expect((await fetchHandler(optionsRequest.clone(), {
+      ...env, PASSKEY_RP_ID: "other.test", PASSKEY_EXPECTED_ORIGINS: '["https://worker.test"]',
+    }, {} as ExecutionContext)).status).toBe(503);
+    expect((await fetchHandler(optionsRequest.clone(), {
+      ...env, PASSKEY_RP_ID: "https://worker.test", PASSKEY_EXPECTED_ORIGINS: '["https://worker.test"]',
+    }, {} as ExecutionContext)).status).toBe(503);
+    expect((await fetchHandler(optionsRequest.clone(), {
+      ...env, PASSKEY_RP_ID: "127.0.0.1", PASSKEY_EXPECTED_ORIGINS: '["http://127.0.0.1:8787"]',
+    }, {} as ExecutionContext)).status).toBe(503);
     const handle = unique("passkey");
     const optionsResponse = await call("/api/v1/auth/passkeys/registration/options", {
       method: "POST",
@@ -170,6 +194,156 @@ describe("Worker runtime integration", () => {
     expect(logout.status).toBe(204);
     expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
     expect((await call("/api/v1/devices", { headers: cookie })).status).toBe(401);
+  });
+
+  it("rotates browser sessions without accepting the old cookie or CSRF token", async () => {
+    const bearer = await bootstrap("198.51.100.212");
+    const token = `browser_${unique("token")}`;
+    const csrf = `csrf_${unique("token")}`;
+    const now = Date.now();
+    const sessionId = `ses_${crypto.randomUUID().replaceAll("-", "")}`;
+    await env.DB.prepare(`INSERT INTO sessions
+      (token_hash, user_id, device_id, created_at, expires_at, session_kind, session_id, csrf_token_hash, last_seen_at, idle_expires_at, absolute_expires_at)
+      VALUES (?, ?, ?, ?, ?, 'browser', ?, ?, ?, ?, ?)`)
+      .bind(await sha256Hex(token), bearer.user.id, bearer.device.id, now, now + 60_000, sessionId,
+        await sha256Hex(csrf), now, now + 60_000, now + 120_000).run();
+    const cookie = `__Host-pushbridge_session=${token}`;
+    expect((await call("/api/v1/devices", { headers: { cookie } })).status).toBe(200);
+    const cursorSecret = await env.DB.prepare("SELECT cursor_secret FROM devices WHERE id = ?")
+      .bind(bearer.device.id).first<{ cursor_secret: string }>();
+
+    const rotated = await call("/api/v1/auth/session/rotate", {
+      method: "POST",
+      headers: { cookie, origin: "https://worker.test", "x-csrf-token": csrf },
+    });
+    expect(rotated.status).toBe(200);
+    const rotatedBody = await rotated.json<{ csrf_token: string }>();
+    expect(rotatedBody.csrf_token).not.toBe(csrf);
+    const setCookie = rotated.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("Secure; HttpOnly; SameSite=Strict");
+    const rotatedCookie = setCookie.split(";", 1)[0];
+    expect(rotatedCookie).not.toBe(cookie);
+    expect((await call("/api/v1/devices", { headers: { cookie } })).status).toBe(401);
+    expect((await call("/api/v1/devices", { headers: { cookie: rotatedCookie } })).status).toBe(200);
+    expect((await call("/api/v1/device-links", {
+      method: "POST",
+      headers: { cookie: rotatedCookie, origin: "https://worker.test", "x-csrf-token": csrf, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Old CSRF peer", kind: "pwa" }),
+    })).status).toBe(403);
+    expect((await call("/api/v1/device-links", {
+      method: "POST",
+      headers: { cookie: rotatedCookie, origin: "https://worker.test", "x-csrf-token": rotatedBody.csrf_token, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Rotated peer", kind: "pwa" }),
+    })).status).toBe(201);
+    const cursorAfter = await env.DB.prepare("SELECT cursor_secret FROM devices WHERE id = ?")
+      .bind(bearer.device.id).first<{ cursor_secret: string }>();
+    expect(cursorAfter?.cursor_secret).toBe(cursorSecret?.cursor_secret);
+  });
+
+  it("allows only one winner when the same browser session is revoked concurrently", async () => {
+    const bearer = await bootstrap("198.51.100.218");
+    const now = Date.now();
+    const currentToken = `browser_${unique("current")}`;
+    const currentCsrf = `csrf_${unique("current")}`;
+    const currentId = `ses_${crypto.randomUUID().replaceAll("-", "")}`;
+    const targetId = `ses_${crypto.randomUUID().replaceAll("-", "")}`;
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO sessions
+        (token_hash, user_id, device_id, created_at, expires_at, session_kind, session_id, csrf_token_hash, last_seen_at, idle_expires_at, absolute_expires_at)
+        VALUES (?, ?, ?, ?, ?, 'browser', ?, ?, ?, ?, ?)`)
+        .bind(await sha256Hex(currentToken), bearer.user.id, bearer.device.id, now, now + 60_000, currentId,
+          await sha256Hex(currentCsrf), now, now + 60_000, now + 120_000),
+      env.DB.prepare(`INSERT INTO sessions
+        (token_hash, user_id, device_id, created_at, expires_at, session_kind, session_id, csrf_token_hash, last_seen_at, idle_expires_at, absolute_expires_at)
+        VALUES (?, ?, ?, ?, ?, 'browser', ?, ?, ?, ?, ?)`)
+        .bind(await sha256Hex(`browser_${unique("target")}`), bearer.user.id, bearer.device.id, now, now + 60_000, targetId,
+          await sha256Hex(`csrf_${unique("target")}`), now, now + 60_000, now + 120_000),
+    ]);
+    const revoke = () => call(`/api/v1/auth/sessions/${targetId}`, {
+      method: "DELETE",
+      headers: { cookie: `__Host-pushbridge_session=${currentToken}`, origin: "https://worker.test", "x-csrf-token": currentCsrf },
+    });
+    const responses = await Promise.all([revoke(), revoke()]);
+    expect(responses.map((response) => response.status).sort()).toEqual([204, 404]);
+  });
+
+  it("redeems device links exactly once and rejects expiry and concurrent replay", async () => {
+    const owner = await bootstrap("198.51.100.213");
+    const create = async (name: string) => {
+      const response = await call("/api/v1/device-links", {
+        method: "POST",
+        headers: auth(owner.access_token, { "content-type": "application/json" }),
+        body: JSON.stringify({ name, kind: "pwa", public_key: "fixture-key" }),
+      });
+      expect(response.status).toBe(201);
+      return response.json<{ id: string; link_token: string; status: string }>();
+    };
+    const redeem = (linkToken: string) => call("/api/v1/device-links/redeem", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.214" },
+      body: JSON.stringify({ link_token: linkToken }),
+    });
+
+    const link = await create("One-use peer");
+    expect((await call(`/api/v1/device-links/${link.id}`, { headers: auth(owner.access_token) })).status).toBe(200);
+    const first = await redeem(link.link_token);
+    expect(first.status).toBe(201);
+    const linked = await first.json<{ device: { id: string }; access_token: string }>();
+    expect((await call("/api/v1/devices/me", { headers: auth(linked.access_token) })).status).toBe(200);
+    expect((await redeem(link.link_token)).status).toBe(410);
+    expect(await (await call(`/api/v1/device-links/${link.id}`, { headers: auth(owner.access_token) })).json())
+      .toEqual(expect.objectContaining({ status: "consumed", device_id: linked.device.id }));
+
+    const expired = await create("Expired peer");
+    await env.DB.prepare("UPDATE device_links SET expires_at = ? WHERE id = ?").bind(Date.now() - 1, expired.id).run();
+    expect((await redeem(expired.link_token)).status).toBe(410);
+
+    const raced = await create("Concurrent peer");
+    const results = await Promise.all([redeem(raced.link_token), redeem(raced.link_token)]);
+    expect(results.map((response) => response.status).sort()).toEqual([201, 410]);
+    const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE user_id = ? AND name_ciphertext = ?")
+      .bind(owner.user.id, "Concurrent peer").first<{ count: number }>();
+    expect(Number(count?.count)).toBe(1);
+  });
+
+  it("enforces independent IP, account, and device mutation rate limits", async () => {
+    const now = Date.now();
+    const windowStartedAt = Math.floor(now / 600_000) * 600_000;
+    const sourceIp = "198.51.100.215";
+    await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+      VALUES (?, 'registration_options', ?, 20)`)
+      .bind(await sha256Hex(sourceIp), windowStartedAt).run();
+    const ipLimited = await call("/api/v1/auth/passkeys/registration/options", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": sourceIp },
+      body: JSON.stringify({ handle: unique("ip_rate"), device_name: "Rate test" }),
+    });
+    expect(ipLimited.status).toBe(429);
+    expect((await ipLimited.json<{ detail: { code: string } }>()).detail.code).toBe("rate_limited");
+
+    const owner = await bootstrap("198.51.100.216");
+    const user = await env.DB.prepare("SELECT handle FROM users WHERE id = ?").bind(owner.user.id).first<{ handle: string }>();
+    await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+      VALUES (?, 'account_authentication', ?, 20)`)
+      .bind(await sha256Hex(`account:${owner.user.id}`), windowStartedAt).run();
+    const accountLimited = await call("/api/v1/auth/passkeys/authentication/options", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.217" },
+      body: JSON.stringify({ handle: user!.handle }),
+    });
+    expect(accountLimited.status).toBe(429);
+    expect((await accountLimited.json<{ detail: { code: string } }>()).detail.code).toBe("account_rate_limited");
+
+    await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+      VALUES (?, 'device_mutation', ?, 300)`)
+      .bind(await sha256Hex(`device:${owner.device.id}`), windowStartedAt).run();
+    const deviceLimited = await call("/api/v1/device-links", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ name: "Rate-limited peer", kind: "pwa" }),
+    });
+    expect(deviceLimited.status).toBe(429);
+    expect((await deviceLimited.json<{ detail: { code: string } }>()).detail.code).toBe("device_rate_limited");
   });
 
   it("uses D1, R2, and Durable Object bindings", async () => {

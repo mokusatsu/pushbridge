@@ -145,6 +145,15 @@ export interface FeatureCapabilities {
   device_registration: boolean;
   passkey_authentication: boolean;
   browser_cookie_sessions: boolean;
+  session_rotation: boolean;
+  one_time_device_link: boolean;
+}
+
+export interface PasskeyPublicConfig {
+  passkey_enabled: boolean;
+  rp_name: string | null;
+  turnstile_required: boolean;
+  turnstile_site_key: string | null;
 }
 
 export interface LimitCapabilities {
@@ -314,6 +323,13 @@ export interface OutboxJob {
   /** Ephemeral UI state. A resumed transfer starts again at zero. */
   upload_progress?: number;
   last_error?: string;
+}
+
+export interface DeviceLinkGrant {
+  id: string;
+  link_token: string;
+  expires_at: string;
+  status: 'pending';
 }
 
 export type ConnectionState = 'online' | 'offline' | 'degraded' | 'checking';

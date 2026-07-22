@@ -39,6 +39,10 @@ def get_capabilities(
             e2ee=False,
             direct_upload=True,
             device_registration=True,
+            passkey_authentication=False,
+            browser_cookie_sessions=False,
+            session_rotation=False,
+            one_time_device_link=False,
         ),
         limits=CapabilityLimits(
             max_file_bytes=settings.max_file_size_bytes,

@@ -5,7 +5,7 @@ import { saveClientSettings } from '@/config';
 import type {
   ClientSettings,
   Device,
-  DeviceCredential,
+  DeviceLinkGrant,
   FileAttachment,
   OutboxJob,
   PushRecord,
@@ -141,6 +141,16 @@ export class AppRuntime {
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
     navigator.serviceWorker?.addEventListener('message', this.serviceWorkerMessageHandler);
+
+    if (this.settings.authMode === 'cookie' && this.settings.csrfToken) {
+      try {
+        const rotated = await this.api.rotateBrowserSession();
+        this.settings.csrfToken = rotated.csrf_token;
+        saveClientSettings(this.settings);
+      } catch (error) {
+        this.notify('error', apiErrorMessage(error));
+      }
+    }
 
     await this.reloadCached();
     await this.refreshStorageUsage(true);
@@ -528,13 +538,11 @@ export class AppRuntime {
     }
   }
 
-  async linkDevice(name: string, kind: 'pwa' | 'web' | 'browser_extension' | 'test'): Promise<DeviceCredential | undefined> {
+  async createDeviceLink(name: string, kind: 'pwa' | 'web' | 'browser_extension'): Promise<DeviceLinkGrant | undefined> {
     try {
-      const credential = await this.api.linkDevice({ name, kind });
-      await this.db.putDevice(credential.device);
-      await this.reloadCached();
-      this.notify('success', '追加端末をリンクしました。表示されたTokenは再表示できません。');
-      return credential;
+      const grant = await this.api.createDeviceLink({ name, kind });
+      this.notify('success', '一回限りの端末リンクTokenを発行しました。');
+      return grant;
     } catch (error) {
       this.notify('error', apiErrorMessage(error));
       return undefined;

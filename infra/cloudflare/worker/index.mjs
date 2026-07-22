@@ -1851,6 +1851,7 @@ async function cleanupMetadata(env, now, report) {
     env.DB.prepare("DELETE FROM bootstrap_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM auth_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
+    env.DB.prepare("DELETE FROM device_links WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM file_tickets WHERE expires_at <= ?").bind(now - TICKET_RECORD_TTL_MS),
     env.DB.prepare("DELETE FROM storage_usage_daily WHERE day < ?").bind(utcDay(now - 400 * DAY_MS))
   ];
@@ -1983,13 +1984,13 @@ async function linkDevice(request, env, auth, requestId, runtime) {
   const deviceId = runtime.id("dev");
   const token = runtime.token();
   const expiresAt = now + 30 * 24 * 60 * 60 * 1e3;
-  const kind = body.kind === "browser_extension" ? "extension" : typeof body.kind === "string" ? body.kind : "web";
-  if (!["web", "pwa", "extension"].includes(kind)) return problem(422, "validation_error", "Invalid device kind.", requestId);
+  const kind2 = body.kind === "browser_extension" ? "extension" : typeof body.kind === "string" ? body.kind : "web";
+  if (!["web", "pwa", "extension"].includes(kind2)) return problem(422, "validation_error", "Invalid device kind.", requestId);
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, auth.user_id, kind, body.name.trim(), publicKey, now, now, now),
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, auth.user_id, kind2, body.name.trim(), publicKey, now, now, now),
     env.DB.prepare("INSERT INTO sessions (token_hash, user_id, device_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)").bind(await sha256Hex(token), auth.user_id, deviceId, now, expiresAt)
   ]);
   const row = await env.DB.prepare("SELECT * FROM devices WHERE id = ?").bind(deviceId).first();
@@ -2034,6 +2035,16 @@ function allowedCookieOrigins(env) {
   }
   return [];
 }
+async function enforceDeviceMutationRate(request, env, deviceId, requestId, runtime) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+  const sourceHash = await sha256Hex(`device:${deviceId}`);
+  const windowStartedAt = Math.floor(runtime.now() / 6e5) * 6e5;
+  const row = await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+    VALUES (?, 'device_mutation', ?, 1)
+    ON CONFLICT(source_hash, action, window_started_at) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`).bind(sourceHash, windowStartedAt).first();
+  const limit = Math.min(5e3, Math.max(10, Number(env.DEVICE_MUTATION_RATE_LIMIT) || 300));
+  if (Number(row?.attempts) > limit) throw problem(429, "device_rate_limited", "This device sent too many changes. Retry later.", requestId, { "retry-after": "600" });
+}
 async function authenticate(request, env, requestId, runtime) {
   const header = request.headers.get("authorization") ?? "";
   const bearer = header.startsWith("Bearer ") && header.length > 7 ? header.slice(7) : null;
@@ -2043,7 +2054,7 @@ async function authenticate(request, env, requestId, runtime) {
   const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(`
     SELECT s.user_id, s.device_id, s.expires_at, s.revoked_at AS session_revoked_at,
-      s.session_kind, s.csrf_token_hash, s.idle_expires_at, s.absolute_expires_at,
+      s.session_kind, s.csrf_token_hash, s.idle_expires_at, s.absolute_expires_at, d.cursor_secret,
       u.handle, u.deleted_at AS user_deleted_at, d.revoked_at AS device_revoked_at
     FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
     WHERE s.token_hash = ?
@@ -2065,7 +2076,14 @@ async function authenticate(request, env, requestId, runtime) {
     const nextIdle = Math.min(runtime.now() + 7 * 24 * 60 * 60 * 1e3, Number(row.absolute_expires_at));
     await env.DB.prepare("UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?, expires_at = ? WHERE token_hash = ?").bind(runtime.now(), nextIdle, nextIdle, tokenHash).run();
   }
-  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: tokenHash, session_token_hash: tokenHash, auth_method: authMethod };
+  await enforceDeviceMutationRate(request, env, row.device_id, requestId, runtime);
+  let cursorKey = row.cursor_secret;
+  if (!cursorKey) {
+    const candidate = runtime.token();
+    await env.DB.prepare("UPDATE devices SET cursor_secret = ? WHERE id = ? AND cursor_secret IS NULL").bind(candidate, row.device_id).run();
+    cursorKey = (await env.DB.prepare("SELECT cursor_secret FROM devices WHERE id = ?").bind(row.device_id).first())?.cursor_secret ?? candidate;
+  }
+  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: cursorKey, session_token_hash: tokenHash, auth_method: authMethod };
 }
 async function consumeBootstrapAttempt(request, env, requestId, runtime) {
   const source = request.headers.get("cf-connecting-ip") ?? "local-development";
@@ -2114,16 +2132,16 @@ async function bootstrap(request, env, requestId, runtime) {
   const token = runtime.token();
   const expiresAt = now + 30 * 24 * 60 * 60 * 1e3;
   const requestedKind = body.device_kind === "browser_extension" ? "extension" : typeof body.device_kind === "string" ? body.device_kind : "pwa";
-  const kind = ["web", "pwa", "extension"].includes(requestedKind) ? requestedKind : "pwa";
+  const kind2 = ["web", "pwa", "extension"].includes(requestedKind) ? requestedKind : "pwa";
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
   await env.DB.batch([
     env.DB.prepare("INSERT INTO users (id, handle, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(userId, body.handle, now, now),
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, userId, kind, body.device_name.trim(), publicKey, now, now, now),
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, userId, kind2, body.device_name.trim(), publicKey, now, now, now),
     env.DB.prepare("INSERT INTO sessions (token_hash, user_id, device_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)").bind(await sha256Hex(token), userId, deviceId, now, expiresAt)
   ]);
-  const device = { id: deviceId, user_id: userId, kind, name_ciphertext: body.device_name.trim(), public_key: publicKey, created_at: now, last_seen_at: now, revoked_at: null };
+  const device = { id: deviceId, user_id: userId, kind: kind2, name_ciphertext: body.device_name.trim(), public_key: publicKey, created_at: now, last_seen_at: now, revoked_at: null };
   return json({
     user: { id: userId, handle: body.handle, created_at: iso(now) },
     device: deviceOut(device, deviceId),
@@ -2131,6 +2149,84 @@ async function bootstrap(request, env, requestId, runtime) {
     token_type: "bearer",
     expires_at: iso(expiresAt)
   }, { status: 201, headers: { "x-request-id": requestId } });
+}
+
+// infra/cloudflare/worker/src/device-links.ts
+var LINK_TTL_MS = 10 * 60 * 1e3;
+function kind(value) {
+  if (value === "browser_extension") return "extension";
+  return value === "web" || value === "pwa" || value === "extension" ? value : null;
+}
+async function activeDeviceCount(env, userId) {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS count FROM devices WHERE user_id = ? AND revoked_at IS NULL").bind(userId).first();
+  return Number(row?.count ?? 0);
+}
+async function createDeviceLink(request, env, auth, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  const deviceName = typeof body.name === "string" ? body.name.trim() : "";
+  const deviceKind2 = kind(body.kind);
+  if (!deviceName || deviceName.length > 100 || !deviceKind2) {
+    return problem(422, "validation_error", "A valid device name and kind are required.", requestId);
+  }
+  if (await activeDeviceCount(env, auth.user_id) >= 10) return problem(409, "device_limit", "The device limit has been reached.", requestId);
+  const pending = await env.DB.prepare(`SELECT COUNT(*) AS count FROM device_links
+    WHERE user_id = ? AND consumed_at IS NULL AND expires_at > ?`).bind(auth.user_id, runtime.now()).first();
+  if (Number(pending?.count ?? 0) >= 10) return problem(429, "pending_link_limit", "Too many pending device links.", requestId);
+  const token = runtime.token();
+  const linkId = runtime.id("lnk");
+  const now = runtime.now();
+  const expiresAt = now + LINK_TTL_MS;
+  const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  await env.DB.prepare(`INSERT INTO device_links
+    (id, user_id, created_by_device_id, token_hash, device_name, device_kind, public_key, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(linkId, auth.user_id, auth.device_id, await sha256Hex(token), deviceName, deviceKind2, publicKey, now, expiresAt).run();
+  return json({ id: linkId, link_token: token, expires_at: iso(expiresAt), status: "pending" }, {
+    status: 201,
+    headers: { "x-request-id": requestId, pragma: "no-cache" }
+  });
+}
+async function deviceLinkStatus(env, auth, requestId, linkId, runtime) {
+  const row = await env.DB.prepare("SELECT * FROM device_links WHERE id = ? AND user_id = ?").bind(linkId, auth.user_id).first();
+  if (!row) return problem(404, "device_link_not_found", "Device link not found.", requestId);
+  const status = row.consumed_at != null ? "consumed" : row.expires_at <= runtime.now() ? "expired" : "pending";
+  return json({ id: row.id, status, expires_at: iso(row.expires_at), consumed_at: iso(row.consumed_at), device_id: row.consumed_device_id }, {
+    headers: { "x-request-id": requestId }
+  });
+}
+async function redeemDeviceLink(request, env, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  if (typeof body.link_token !== "string" || !body.link_token) return problem(422, "validation_error", "link_token is required.", requestId);
+  const now = runtime.now();
+  const deviceId = runtime.id("dev");
+  const tokenHash = await sha256Hex(body.link_token);
+  const row = await env.DB.prepare("SELECT * FROM device_links WHERE token_hash = ?").bind(tokenHash).first();
+  if (!row || row.consumed_at != null || row.expires_at <= now) {
+    return problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
+  }
+  const token = runtime.token();
+  const expiresAt = now + 30 * 24 * 60 * 60 * 1e3;
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO devices
+      (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
+      SELECT ?, user_id, device_kind, device_name, public_key, ?, ?, ? FROM device_links AS link
+      WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+        AND (SELECT COUNT(*) FROM devices WHERE user_id = link.user_id AND revoked_at IS NULL) < 10`).bind(deviceId, now, now, now, row.id, tokenHash, now),
+    env.DB.prepare(`UPDATE device_links SET consumed_at = ?, consumed_device_id = ?
+      WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+        AND EXISTS (SELECT 1 FROM devices WHERE id = ?)`).bind(now, deviceId, row.id, tokenHash, now, deviceId),
+    env.DB.prepare(`INSERT INTO sessions (token_hash, user_id, device_id, created_at, expires_at)
+      SELECT ?, user_id, id, ?, ? FROM devices WHERE id = ?`).bind(await sha256Hex(token), now, expiresAt, deviceId)
+  ]);
+  const created = await env.DB.prepare("SELECT id FROM devices WHERE id = ?").bind(deviceId).first();
+  if (!created) {
+    const count = await activeDeviceCount(env, row.user_id);
+    return count >= 10 ? problem(409, "device_limit", "The device limit has been reached.", requestId) : problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
+  }
+  const device = { id: deviceId, user_id: row.user_id, kind: row.device_kind, name_ciphertext: row.device_name, public_key: row.public_key, created_at: now, last_seen_at: now, revoked_at: null };
+  return json({ device: deviceOut(device, deviceId), access_token: token, token_type: "bearer", expires_at: iso(expiresAt) }, {
+    status: 201,
+    headers: { "x-request-id": requestId, pragma: "no-cache" }
+  });
 }
 
 // infra/cloudflare/worker/src/files.ts
@@ -7555,16 +7651,16 @@ function __decorate(decorators, target, key, desc) {
   else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
   return c > 3 && r && Object.defineProperty(target, key, r), r;
 }
-function __classPrivateFieldGet(receiver, state, kind, f) {
-  if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+function __classPrivateFieldGet(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
-  return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 }
-function __classPrivateFieldSet(receiver, state, value, kind, f) {
-  if (kind === "m") throw new TypeError("Private method is not writable");
-  if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+function __classPrivateFieldSet(receiver, state, value, kind2, f) {
+  if (kind2 === "m") throw new TypeError("Private method is not writable");
+  if (kind2 === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
-  return kind === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
 }
 
 // node_modules/@peculiar/utils/build/esm/encoding/hex.js
@@ -18917,10 +19013,13 @@ function passkeyConfig(env) {
   const rpID = env.PASSKEY_RP_ID?.trim();
   const origins = expectedOrigins(env.PASSKEY_EXPECTED_ORIGINS);
   if (!rpID || origins.length === 0) return null;
+  if (rpID !== rpID.toLowerCase() || rpID.includes(":") || rpID.includes("/") || /^\d+(?:\.\d+){3}$/.test(rpID) || !/^(?:localhost|(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/.test(rpID)) return null;
   if (!origins.every((origin) => {
     try {
       const url = new URL(origin);
-      return url.origin === origin && (url.protocol === "https:" || url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname));
+      const secure = url.protocol === "https:" || url.protocol === "http:" && url.hostname === "localhost";
+      const rpMatches = url.hostname === rpID || url.hostname.endsWith(`.${rpID}`);
+      return url.origin === origin && secure && rpMatches;
     } catch {
       return false;
     }
@@ -18929,6 +19028,16 @@ function passkeyConfig(env) {
 }
 function passkeyUnavailable(requestId) {
   return problem(503, "passkey_not_configured", "Passkey authentication is unavailable until an explicit RP ID and expected origin are configured.", requestId);
+}
+function passkeyPublicConfig(env, requestId) {
+  const config = passkeyConfig(env);
+  const turnstileRequired = env.REQUIRE_PASSKEY_TURNSTILE === "true" || env.APP_ENVIRONMENT === "production" && env.REQUIRE_PASSKEY_TURNSTILE !== "false";
+  return json({
+    passkey_enabled: Boolean(config),
+    rp_name: config?.rpName ?? null,
+    turnstile_required: turnstileRequired,
+    turnstile_site_key: turnstileRequired ? env.TURNSTILE_SITE_KEY ?? null : null
+  }, { headers: { "x-request-id": requestId } });
 }
 async function consumeAuthAttempt(request, env, action, requestId, runtime) {
   const source = request.headers.get("cf-connecting-ip") ?? "local-development";
@@ -18940,6 +19049,15 @@ async function consumeAuthAttempt(request, env, action, requestId, runtime) {
     RETURNING attempts`).bind(sourceHash, action, windowStartedAt).first();
   const limit = Math.min(100, Math.max(1, Number(env.AUTH_RATE_LIMIT) || 20));
   return Number(row?.attempts) > limit ? problem(429, "rate_limited", "Too many authentication attempts. Retry later.", requestId, { "retry-after": "600" }) : null;
+}
+async function consumeAccountAttempt(env, userId, requestId, runtime) {
+  const sourceHash = await sha256Hex(`account:${userId}`);
+  const windowStartedAt = Math.floor(runtime.now() / 6e5) * 6e5;
+  const row = await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+    VALUES (?, 'account_authentication', ?, 1)
+    ON CONFLICT(source_hash, action, window_started_at) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`).bind(sourceHash, windowStartedAt).first();
+  const limit = Math.min(100, Math.max(1, Number(env.ACCOUNT_AUTH_RATE_LIMIT) || 20));
+  return Number(row?.attempts) > limit ? problem(429, "account_rate_limited", "Too many authentication attempts for this account. Retry later.", requestId, { "retry-after": "600" }) : null;
 }
 async function verifyTurnstile2(body, request, env, requestId) {
   const required = env.REQUIRE_PASSKEY_TURNSTILE === "true" || env.APP_ENVIRONMENT === "production" && env.REQUIRE_PASSKEY_TURNSTILE !== "false";
@@ -19089,6 +19207,8 @@ async function authenticationOptions(request, env, requestId, runtime) {
     if (!validHandle(body.handle)) return problem(422, "validation_error", "handle is invalid.", requestId);
     const user = await env.DB.prepare("SELECT id FROM users WHERE handle = ? AND deleted_at IS NULL").bind(body.handle).first();
     if (user) {
+      const accountLimited = await consumeAccountAttempt(env, user.id, requestId, runtime);
+      if (accountLimited) return accountLimited;
       userId = user.id;
       const rows = await env.DB.prepare("SELECT credential_id, transports_json FROM passkey_credentials WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at").bind(user.id).all();
       allowCredentials = rows.results.map((row) => ({ id: row.credential_id, transports: transports(row.transports_json) }));
@@ -19165,6 +19285,23 @@ async function logoutBrowserSession(env, auth, requestId, runtime) {
   await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ? AND session_kind = 'browser'").bind(runtime.now(), auth.session_token_hash).run();
   return new Response(null, { status: 204, headers: {
     "set-cookie": `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`,
+    "x-request-id": requestId
+  } });
+}
+async function rotateBrowserSession(env, auth, requestId, runtime) {
+  if (auth.auth_method !== "cookie") return problem(400, "browser_session_required", "A browser session is required.", requestId);
+  const row = await env.DB.prepare("SELECT absolute_expires_at FROM sessions WHERE token_hash = ? AND session_kind = 'browser' AND revoked_at IS NULL").bind(auth.session_token_hash).first();
+  if (!row) return problem(401, "unauthorized", "The browser session is invalid.", requestId);
+  const now = runtime.now();
+  const expiresAt = Math.min(now + BROWSER_IDLE_TTL_MS, Number(row.absolute_expires_at));
+  if (expiresAt <= now) return problem(401, "unauthorized", "The browser session is expired.", requestId);
+  const token = runtime.token();
+  const csrfToken = runtime.token();
+  const result = await env.DB.prepare(`UPDATE sessions SET token_hash = ?, csrf_token_hash = ?, rotated_at = ?,
+    last_seen_at = ?, idle_expires_at = ?, expires_at = ? WHERE token_hash = ? AND revoked_at IS NULL`).bind(await sha256Hex(token), await sha256Hex(csrfToken), now, now, expiresAt, expiresAt, auth.session_token_hash).run();
+  if (result.meta.changes !== 1) return problem(409, "session_rotation_conflict", "The session was rotated or revoked concurrently.", requestId);
+  return json({ csrf_token: csrfToken, expires_at: iso(expiresAt) }, { headers: {
+    "set-cookie": `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, Math.floor((expiresAt - now) / 1e3))}`,
     "x-request-id": requestId
   } });
 }
@@ -19747,7 +19884,9 @@ function capabilities(env) {
       direct_upload: false,
       device_registration: true,
       passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
-      browser_cookie_sessions: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS)
+      browser_cookie_sessions: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
+      session_rotation: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
+      one_time_device_link: true
     },
     limits: {
       max_file_bytes: 26214400,
@@ -19793,20 +19932,28 @@ function createRouter(runtime) {
       if (publicDeliveryResponse) return publicDeliveryResponse;
       if (request.method === "GET" && path === "/v1/system/capabilities") return json(capabilities(env), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/web-push-config") return webPushConfig(env, requestId);
+      if (request.method === "GET" && path === "/v1/auth/config") return passkeyPublicConfig(env, requestId);
       if (request.method === "POST" && path === "/v1/auth/bootstrap") return bootstrap(request, env, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/passkeys/registration/options") return registrationOptions(request, env, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/passkeys/registration/verify") return registrationVerify(request, env, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/passkeys/authentication/options") return authenticationOptions(request, env, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/passkeys/authentication/verify") return authenticationVerify(request, env, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/device-links/redeem") return redeemDeviceLink(request, env, requestId, runtime);
       if (!path.startsWith("/v1/")) return problem(404, "not_found", "Endpoint not found.", requestId);
       const auth = await authenticate(request, env, requestId, runtime);
       if (request.method === "GET" && path === "/v1/auth/sessions") return listBrowserSessions(env, auth, requestId);
       if (request.method === "POST" && path === "/v1/auth/logout") return logoutBrowserSession(env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/auth/session/rotate") return rotateBrowserSession(env, auth, requestId, runtime);
       const sessionMatch = path.match(/^\/v1\/auth\/sessions\/([^/]+)$/);
       if (sessionMatch && request.method === "DELETE") return revokeBrowserSession(decodeURIComponent(sessionMatch[1]), env, auth, requestId, runtime);
       if (request.method === "GET" && path === "/v1/devices") return json(await listDevices(env, auth), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/devices/me") return json(await currentDevice(env, auth), { headers: { "x-request-id": requestId } });
-      if (request.method === "POST" && path === "/v1/devices/link") return linkDevice(request, env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/device-links") return createDeviceLink(request, env, auth, requestId, runtime);
+      const deviceLinkMatch = path.match(/^\/v1\/device-links\/([^/]+)$/);
+      if (deviceLinkMatch && request.method === "GET") return deviceLinkStatus(env, auth, requestId, decodeURIComponent(deviceLinkMatch[1]), runtime);
+      if (request.method === "POST" && path === "/v1/devices/link") {
+        return env.APP_ENVIRONMENT === "production" ? problem(404, "not_found", "Endpoint not found.", requestId) : linkDevice(request, env, auth, requestId, runtime);
+      }
       const deviceMatch = path.match(/^\/v1\/devices\/([^/]+)$/);
       if (deviceMatch && (request.method === "PATCH" || request.method === "DELETE")) {
         return mutateDevice(request, env, auth, requestId, decodeURIComponent(deviceMatch[1]), runtime);

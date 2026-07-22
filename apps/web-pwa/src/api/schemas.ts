@@ -230,6 +230,18 @@ export const linkDeviceResponseSchema = z.object({
   expires_at: z.string(),
 }).strict();
 
+export const deviceLinkGrantSchema = z.object({
+  id: z.string(),
+  link_token: z.string(),
+  expires_at: z.string(),
+  status: z.literal('pending'),
+}).strict();
+
+export const sessionRotationSchema = z.object({
+  csrf_token: z.string(),
+  expires_at: z.string(),
+}).strict();
+
 export const fileInitResponseSchema = z.object({
   file: fileAttachmentSchema,
   upload_url: z.string(),
@@ -312,6 +324,8 @@ const capabilitiesWireSchema = z.object({
     device_registration: z.boolean().default(true),
     passkey_authentication: z.boolean().default(false),
     browser_cookie_sessions: z.boolean().default(false),
+    session_rotation: z.boolean().default(false),
+    one_time_device_link: z.boolean().default(false),
   }).passthrough(),
   limits: z.object({
     max_file_bytes: z.number().nonnegative().default(25 * 1024 * 1024),
@@ -341,6 +355,8 @@ export const capabilitiesSchema = capabilitiesWireSchema.transform((value): Syst
     device_registration: value.features.device_registration,
     passkey_authentication: value.features.passkey_authentication,
     browser_cookie_sessions: value.features.browser_cookie_sessions,
+    session_rotation: value.features.session_rotation,
+    one_time_device_link: value.features.one_time_device_link,
   },
   limits: {
     max_file_bytes: value.limits.max_file_bytes,

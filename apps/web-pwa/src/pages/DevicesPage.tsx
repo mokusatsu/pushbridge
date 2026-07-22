@@ -3,7 +3,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Icon } from '@/components/Icon';
 import { PageHeader } from '@/components/PageHeader';
 import { useAppRuntime, useAppSnapshot } from '@/state/AppContext';
-import type { DeviceCredential, DeviceKind } from '@/types';
+import type { DeviceLinkGrant } from '@/types';
 import { formatDateTime, formatRelativeTime } from '@/utils/format';
 
 export function DevicesPage() {
@@ -12,9 +12,9 @@ export function DevicesPage() {
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState('');
   const [registrationName, setRegistrationName] = useState('追加テスト端末');
-  const [registrationKind, setRegistrationKind] = useState<Exclude<DeviceKind, 'unknown'>>('test');
+  const [registrationKind, setRegistrationKind] = useState<'pwa' | 'web' | 'browser_extension'>('pwa');
   const [linking, setLinking] = useState(false);
-  const [linkedCredential, setLinkedCredential] = useState<DeviceCredential>();
+  const [deviceLink, setDeviceLink] = useState<DeviceLinkGrant>();
   const maxDevices = snapshot.capabilities?.limits.max_devices ?? 10;
   const activeDeviceCount = snapshot.devices.filter((device) => device.active).length;
   const deviceLimitReached = activeDeviceCount >= maxDevices;
@@ -26,15 +26,15 @@ export function DevicesPage() {
 
   const linkDevice = async () => {
     setLinking(true);
-    const credential = await runtime.linkDevice(registrationName.trim(), registrationKind);
+    const grant = await runtime.createDeviceLink(registrationName.trim(), registrationKind);
     setLinking(false);
-    if (credential) setLinkedCredential(credential);
+    if (grant) setDeviceLink(grant);
   };
 
   const copyToken = async () => {
-    if (!linkedCredential) return;
-    await navigator.clipboard.writeText(linkedCredential.access_token);
-    runtime.notify('success', '追加端末のBearer Tokenをコピーしました。');
+    if (!deviceLink) return;
+    await navigator.clipboard.writeText(deviceLink.link_token);
+    runtime.notify('success', '一回限りの端末リンクTokenをコピーしました。');
   };
 
   return (
@@ -51,26 +51,25 @@ export function DevicesPage() {
           <div>
             <span className="page-eyebrow">LINK DEVICE</span>
             <h2>追加端末をリンク</h2>
-            <p>RelayMockの承認済みリンクを模擬します。返されるTokenは一度しか表示されないため、対象端末へ安全に転記してください。</p>
+            <p>10分間・一回限りの承認Tokenを発行します。対象端末の設定画面へ安全に転記してください。</p>
             <span className={`status-chip${deviceLimitReached ? ' muted' : ''}`}>{activeDeviceCount} / {maxDevices}台</span>
           </div>
           <div className="inline-form relaymock-link-form">
             <input value={registrationName} onChange={(event) => setRegistrationName(event.target.value)} aria-label="追加端末名" maxLength={100} />
-            <select value={registrationKind} onChange={(event) => setRegistrationKind(event.target.value as Exclude<DeviceKind, 'unknown'>)} aria-label="追加端末種別">
-              <option value="test">test</option>
+            <select value={registrationKind} onChange={(event) => setRegistrationKind(event.target.value as 'pwa' | 'web' | 'browser_extension')} aria-label="追加端末種別">
               <option value="web">web</option>
               <option value="pwa">pwa</option>
               <option value="browser_extension">browser_extension</option>
             </select>
             <button className="button button-primary" type="button" disabled={!registrationName.trim() || linking || deviceLimitReached} onClick={() => void linkDevice()}>{linking ? 'リンク中…' : deviceLimitReached ? '上限到達' : 'リンク'}</button>
           </div>
-          {linkedCredential && (
+          {deviceLink && (
             <div className="info-banner compact">
               <Icon name="check" size={18} />
               <div>
-                <strong>{linkedCredential.device.name} のToken</strong>
-                <code className="credential-token">{linkedCredential.access_token}</code>
-                <span>有効期限: {formatDateTime(linkedCredential.expires_at)}</span>
+                <strong>一回限りの端末リンクToken</strong>
+                <code className="credential-token">{deviceLink.link_token}</code>
+                <span>有効期限: {formatDateTime(deviceLink.expires_at)}</span>
               </div>
               <button className="button button-secondary button-small" type="button" onClick={() => void copyToken()}><Icon name="copy" size={16} />コピー</button>
             </div>

@@ -155,6 +155,28 @@ variable "auth_rate_limit" {
   }
 }
 
+variable "account_auth_rate_limit" {
+  description = "Maximum Passkey option requests per account in a ten-minute window."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.account_auth_rate_limit >= 1 && var.account_auth_rate_limit <= 100
+    error_message = "account_auth_rate_limit must be between 1 and 100."
+  }
+}
+
+variable "device_mutation_rate_limit" {
+  description = "Maximum authenticated state-changing requests per device in a ten-minute window."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.device_mutation_rate_limit >= 10 && var.device_mutation_rate_limit <= 5000
+    error_message = "device_mutation_rate_limit must be between 10 and 5000."
+  }
+}
+
 variable "access_ip_allowlist" {
   description = "Optional Cloudflare Access application that restricts the complete Worker hostname, including Static Assets, to source IP CIDRs. Set to null to disable."
   type = object({

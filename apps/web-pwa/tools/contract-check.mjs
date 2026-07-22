@@ -46,6 +46,18 @@ for (const path of [
   '/v1/system/capabilities',
   '/v1/web-push-config',
   '/v1/auth/bootstrap',
+  '/v1/auth/config',
+  '/v1/auth/passkeys/registration/options',
+  '/v1/auth/passkeys/registration/verify',
+  '/v1/auth/passkeys/authentication/options',
+  '/v1/auth/passkeys/authentication/verify',
+  '/v1/auth/logout',
+  '/v1/auth/session/rotate',
+  '/v1/auth/sessions',
+  '/v1/auth/sessions/{session_id}',
+  '/v1/device-links',
+  '/v1/device-links/redeem',
+  '/v1/device-links/{link_id}',
   '/v1/devices',
   '/v1/devices/me',
   '/v1/devices/link',
@@ -91,7 +103,14 @@ for (const name of [
 ]) assert(capabilities.properties?.[name], `CapabilityLimits.${name} is missing`);
 
 const capabilityFeatures = schema('CapabilityFeatures');
-for (const name of ['web_push_delivery', 'web_push_subscription_registration']) {
+for (const name of [
+  'web_push_delivery',
+  'web_push_subscription_registration',
+  'passkey_authentication',
+  'browser_cookie_sessions',
+  'session_rotation',
+  'one_time_device_link',
+]) {
   assert(capabilityFeatures.properties?.[name], `CapabilityFeatures.${name} is missing`);
 }
 
@@ -117,6 +136,8 @@ for (const name of ['DownloadTicketOut', 'FileInitOut']) {
 for (const [method, path] of [
   ['post', '/v1/auth/bootstrap'],
   ['post', '/v1/devices/link'],
+  ['post', '/v1/device-links'],
+  ['post', '/v1/device-links/redeem'],
 ]) {
   const response = operation(method, path).responses?.['201'];
   assert(response?.headers?.['Cache-Control'], `${method.toUpperCase()} ${path} must publish Cache-Control: no-store`);

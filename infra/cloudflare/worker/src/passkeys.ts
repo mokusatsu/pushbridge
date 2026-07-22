@@ -66,10 +66,15 @@ export function passkeyConfig(env: Env): PasskeyConfig | null {
   const rpID = env.PASSKEY_RP_ID?.trim();
   const origins = expectedOrigins(env.PASSKEY_EXPECTED_ORIGINS);
   if (!rpID || origins.length === 0) return null;
+  if (rpID !== rpID.toLowerCase() || rpID.includes(":") || rpID.includes("/")
+    || /^\d+(?:\.\d+){3}$/.test(rpID)
+    || !/^(?:localhost|(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/.test(rpID)) return null;
   if (!origins.every((origin) => {
     try {
       const url = new URL(origin);
-      return url.origin === origin && (url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname)));
+      const secure = url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost");
+      const rpMatches = url.hostname === rpID || url.hostname.endsWith(`.${rpID}`);
+      return url.origin === origin && secure && rpMatches;
     } catch {
       return false;
     }
@@ -79,6 +84,18 @@ export function passkeyConfig(env: Env): PasskeyConfig | null {
 
 function passkeyUnavailable(requestId: string): Response {
   return problem(503, "passkey_not_configured", "Passkey authentication is unavailable until an explicit RP ID and expected origin are configured.", requestId);
+}
+
+export function passkeyPublicConfig(env: Env, requestId: string): Response {
+  const config = passkeyConfig(env);
+  const turnstileRequired = env.REQUIRE_PASSKEY_TURNSTILE === "true"
+    || (env.APP_ENVIRONMENT === "production" && env.REQUIRE_PASSKEY_TURNSTILE !== "false");
+  return json({
+    passkey_enabled: Boolean(config),
+    rp_name: config?.rpName ?? null,
+    turnstile_required: turnstileRequired,
+    turnstile_site_key: turnstileRequired ? env.TURNSTILE_SITE_KEY ?? null : null,
+  }, { headers: { "x-request-id": requestId } });
 }
 
 async function consumeAuthAttempt(request: Request, env: Env, action: string, requestId: string, runtime: Runtime): Promise<Response | null> {
@@ -92,6 +109,19 @@ async function consumeAuthAttempt(request: Request, env: Env, action: string, re
   const limit = Math.min(100, Math.max(1, Number(env.AUTH_RATE_LIMIT) || 20));
   return Number(row?.attempts) > limit
     ? problem(429, "rate_limited", "Too many authentication attempts. Retry later.", requestId, { "retry-after": "600" })
+    : null;
+}
+
+async function consumeAccountAttempt(env: Env, userId: string, requestId: string, runtime: Runtime): Promise<Response | null> {
+  const sourceHash = await sha256Hex(`account:${userId}`);
+  const windowStartedAt = Math.floor(runtime.now() / 600_000) * 600_000;
+  const row = await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+    VALUES (?, 'account_authentication', ?, 1)
+    ON CONFLICT(source_hash, action, window_started_at) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`)
+    .bind(sourceHash, windowStartedAt).first<{ attempts: number }>();
+  const limit = Math.min(100, Math.max(1, Number(env.ACCOUNT_AUTH_RATE_LIMIT) || 20));
+  return Number(row?.attempts) > limit
+    ? problem(429, "account_rate_limited", "Too many authentication attempts for this account. Retry later.", requestId, { "retry-after": "600" })
     : null;
 }
 
@@ -249,6 +279,8 @@ export async function authenticationOptions(request: Request, env: Env, requestI
     if (!validHandle(body.handle)) return problem(422, "validation_error", "handle is invalid.", requestId);
     const user = await env.DB.prepare("SELECT id FROM users WHERE handle = ? AND deleted_at IS NULL").bind(body.handle).first<{ id: string }>();
     if (user) {
+      const accountLimited = await consumeAccountAttempt(env, user.id, requestId, runtime);
+      if (accountLimited) return accountLimited;
       userId = user.id;
       const rows = await env.DB.prepare("SELECT credential_id, transports_json FROM passkey_credentials WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at")
         .bind(user.id).all<Pick<CredentialRow, "credential_id" | "transports_json">>();
@@ -326,6 +358,26 @@ export async function logoutBrowserSession(env: Env, auth: AuthContext, requestI
     .bind(runtime.now(), auth.session_token_hash).run();
   return new Response(null, { status: 204, headers: {
     "set-cookie": `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`,
+    "x-request-id": requestId,
+  } });
+}
+
+export async function rotateBrowserSession(env: Env, auth: AuthContext, requestId: string, runtime: Runtime): Promise<Response> {
+  if (auth.auth_method !== "cookie") return problem(400, "browser_session_required", "A browser session is required.", requestId);
+  const row = await env.DB.prepare("SELECT absolute_expires_at FROM sessions WHERE token_hash = ? AND session_kind = 'browser' AND revoked_at IS NULL")
+    .bind(auth.session_token_hash).first<{ absolute_expires_at: number }>();
+  if (!row) return problem(401, "unauthorized", "The browser session is invalid.", requestId);
+  const now = runtime.now();
+  const expiresAt = Math.min(now + BROWSER_IDLE_TTL_MS, Number(row.absolute_expires_at));
+  if (expiresAt <= now) return problem(401, "unauthorized", "The browser session is expired.", requestId);
+  const token = runtime.token();
+  const csrfToken = runtime.token();
+  const result = await env.DB.prepare(`UPDATE sessions SET token_hash = ?, csrf_token_hash = ?, rotated_at = ?,
+    last_seen_at = ?, idle_expires_at = ?, expires_at = ? WHERE token_hash = ? AND revoked_at IS NULL`)
+    .bind(await sha256Hex(token), await sha256Hex(csrfToken), now, now, expiresAt, expiresAt, auth.session_token_hash).run();
+  if (result.meta.changes !== 1) return problem(409, "session_rotation_conflict", "The session was rotated or revoked concurrently.", requestId);
+  return json({ csrf_token: csrfToken, expires_at: iso(expiresAt) }, { headers: {
+    "set-cookie": `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, Math.floor((expiresAt - now) / 1000))}`,
     "x-request-id": requestId,
   } });
 }

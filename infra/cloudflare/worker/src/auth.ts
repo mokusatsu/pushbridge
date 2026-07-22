@@ -16,6 +16,7 @@ interface SessionRow {
   csrf_token_hash: string | null;
   idle_expires_at: number | null;
   absolute_expires_at: number | null;
+  cursor_secret: string | null;
 }
 
 function cookieValue(request: Request, name: string): string | null {
@@ -37,6 +38,18 @@ function allowedCookieOrigins(env: Env): string[] {
   return [];
 }
 
+async function enforceDeviceMutationRate(request: Request, env: Env, deviceId: string, requestId: string, runtime: Runtime): Promise<void> {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+  const sourceHash = await sha256Hex(`device:${deviceId}`);
+  const windowStartedAt = Math.floor(runtime.now() / 600_000) * 600_000;
+  const row = await env.DB.prepare(`INSERT INTO auth_rate_limits (source_hash, action, window_started_at, attempts)
+    VALUES (?, 'device_mutation', ?, 1)
+    ON CONFLICT(source_hash, action, window_started_at) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`)
+    .bind(sourceHash, windowStartedAt).first<{ attempts: number }>();
+  const limit = Math.min(5000, Math.max(10, Number(env.DEVICE_MUTATION_RATE_LIMIT) || 300));
+  if (Number(row?.attempts) > limit) throw problem(429, "device_rate_limited", "This device sent too many changes. Retry later.", requestId, { "retry-after": "600" });
+}
+
 export async function authenticate(request: Request, env: Env, requestId: string, runtime: Runtime): Promise<AuthContext> {
   const header = request.headers.get("authorization") ?? "";
   const bearer = header.startsWith("Bearer ") && header.length > 7 ? header.slice(7) : null;
@@ -46,7 +59,7 @@ export async function authenticate(request: Request, env: Env, requestId: string
   const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(`
     SELECT s.user_id, s.device_id, s.expires_at, s.revoked_at AS session_revoked_at,
-      s.session_kind, s.csrf_token_hash, s.idle_expires_at, s.absolute_expires_at,
+      s.session_kind, s.csrf_token_hash, s.idle_expires_at, s.absolute_expires_at, d.cursor_secret,
       u.handle, u.deleted_at AS user_deleted_at, d.revoked_at AS device_revoked_at
     FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
     WHERE s.token_hash = ?
@@ -70,7 +83,14 @@ export async function authenticate(request: Request, env: Env, requestId: string
     await env.DB.prepare("UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?, expires_at = ? WHERE token_hash = ?")
       .bind(runtime.now(), nextIdle, nextIdle, tokenHash).run();
   }
-  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: tokenHash, session_token_hash: tokenHash, auth_method: authMethod };
+  await enforceDeviceMutationRate(request, env, row.device_id, requestId, runtime);
+  let cursorKey = row.cursor_secret;
+  if (!cursorKey) {
+    const candidate = runtime.token();
+    await env.DB.prepare("UPDATE devices SET cursor_secret = ? WHERE id = ? AND cursor_secret IS NULL").bind(candidate, row.device_id).run();
+    cursorKey = (await env.DB.prepare("SELECT cursor_secret FROM devices WHERE id = ?").bind(row.device_id).first<{ cursor_secret: string }>())?.cursor_secret ?? candidate;
+  }
+  return { user_id: row.user_id, device_id: row.device_id, handle: row.handle, cursor_key: cursorKey, session_token_hash: tokenHash, auth_method: authMethod };
 }
 
 async function consumeBootstrapAttempt(request: Request, env: Env, requestId: string, runtime: Runtime): Promise<Response | null> {

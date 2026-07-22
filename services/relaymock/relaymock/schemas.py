@@ -432,6 +432,10 @@ class CapabilityFeatures(StrictModel):
     e2ee: bool
     direct_upload: bool
     device_registration: bool
+    passkey_authentication: bool
+    browser_cookie_sessions: bool
+    session_rotation: bool
+    one_time_device_link: bool
 
 
 class CapabilityLimits(StrictModel):

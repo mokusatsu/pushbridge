@@ -53,7 +53,10 @@
     "PASSKEY_EXPECTED_ORIGINS": "[\"http://localhost:8787\"]",
     "PASSKEY_RP_NAME": "Pushbridge Local",
     "REQUIRE_PASSKEY_TURNSTILE": "false",
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "AUTH_RATE_LIMIT": "20",
+    "ACCOUNT_AUTH_RATE_LIMIT": "20",
+    "DEVICE_MUTATION_RATE_LIMIT": "300",
     "R2_BUCKET_NAME": "pushbridge-local-files",
     "FILE_RETENTION_POLICY": "{\"ttl/1d/\":172800,\"ttl/7d/\":691200,\"ttl/30d/\":2678400}"
   }

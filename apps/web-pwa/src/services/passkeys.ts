@@ -8,7 +8,7 @@ import type {
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/browser';
 import type { ApiClient } from '@/api/client';
-import type { Device } from '@/types';
+import type { Device, PasskeyPublicConfig } from '@/types';
 
 interface Challenge<T> {
   challenge_id: string;
@@ -27,7 +27,11 @@ export function passkeysSupported(): boolean {
   return browserSupportsWebAuthn();
 }
 
-export async function registerPasskey(api: ApiClient, input: { handle: string; device_name: string }): Promise<PasskeySession> {
+export async function getPasskeyConfig(api: ApiClient): Promise<PasskeyPublicConfig> {
+  return api.request('/auth/config') as Promise<PasskeyPublicConfig>;
+}
+
+export async function registerPasskey(api: ApiClient, input: { handle: string; device_name: string; turnstile_token?: string }): Promise<PasskeySession> {
   const challenge = await api.request('/auth/passkeys/registration/options', {
     method: 'POST',
     body: JSON.stringify({ ...input, device_kind: 'pwa' }),

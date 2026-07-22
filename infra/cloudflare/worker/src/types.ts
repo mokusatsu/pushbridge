@@ -7,6 +7,7 @@ export interface Env {
   APP_ENVIRONMENT?: string;
   FILE_RETENTION_POLICY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  TURNSTILE_SITE_KEY?: string;
   ENABLE_DEV_BOOTSTRAP?: string;
   REQUIRE_DEV_BOOTSTRAP_TURNSTILE?: string;
   DEV_BOOTSTRAP_RATE_LIMIT?: string;
@@ -15,6 +16,8 @@ export interface Env {
   PASSKEY_RP_NAME?: string;
   REQUIRE_PASSKEY_TURNSTILE?: string;
   AUTH_RATE_LIMIT?: string;
+  ACCOUNT_AUTH_RATE_LIMIT?: string;
+  DEVICE_MUTATION_RATE_LIMIT?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;

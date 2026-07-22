@@ -225,6 +225,7 @@ async function cleanupMetadata(env: Env, now: number, report: CleanupReport): Pr
     env.DB.prepare("DELETE FROM bootstrap_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM auth_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
+    env.DB.prepare("DELETE FROM device_links WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM file_tickets WHERE expires_at <= ?").bind(now - TICKET_RECORD_TTL_MS),
     env.DB.prepare("DELETE FROM storage_usage_daily WHERE day < ?").bind(utcDay(now - 400 * DAY_MS)),
   ];

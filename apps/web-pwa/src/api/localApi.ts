@@ -4,6 +4,7 @@ import type {
   ChangesResponse,
   Device,
   DeviceCredential,
+  DeviceLinkGrant,
   DownloadTicket,
   FileAttachment,
   FileDelivery,
@@ -25,6 +26,7 @@ import {
   bootstrapResponseSchema,
   capabilitiesSchema,
   deviceResponseSchema,
+  deviceLinkGrantSchema,
   devicesResponseSchema,
   downloadTicketSchema,
   fileCompleteResponseSchema,
@@ -35,6 +37,7 @@ import {
   linkDeviceResponseSchema,
   pushListResponseSchema,
   pushResponseSchema,
+  sessionRotationSchema,
   realtimeTicketSchema,
   subscriptionSchema,
   storageUsageSchema,
@@ -54,6 +57,7 @@ export const endpoints = {
   devices: '/devices',
   currentDevice: '/devices/me',
   linkDevice: '/devices/link',
+  deviceLinks: '/device-links',
   pushes: '/pushes',
   files: '/files',
   realtimeTicket: '/realtime-ticket',
@@ -72,6 +76,8 @@ const relayMockCapabilities: SystemCapabilities = {
     device_registration: true,
     passkey_authentication: false,
     browser_cookie_sessions: false,
+    session_rotation: false,
+    one_time_device_link: false,
   },
   limits: {
     max_file_bytes: 25 * 1024 * 1024,
@@ -310,6 +316,24 @@ export class LocalApi {
 
   async uploadFile(init: FileInitResponse, blob: Blob, options: UploadOptions = {}): Promise<void> {
     await this.client.upload(init.upload, blob, options);
+  }
+
+  async createDeviceLink(input: LinkDeviceRequest): Promise<DeviceLinkGrant> {
+    return deviceLinkGrantSchema.parse(await this.client.request(endpoints.deviceLinks, {
+      method: 'POST',
+      body: JSON.stringify({ name: input.name, kind: input.kind, public_key: input.public_key ?? null }),
+    }));
+  }
+
+  async redeemDeviceLink(linkToken: string): Promise<DeviceCredential> {
+    return linkDeviceResponseSchema.parse(await this.client.request(`${endpoints.deviceLinks}/redeem`, {
+      method: 'POST',
+      body: JSON.stringify({ link_token: linkToken }),
+    }));
+  }
+
+  async rotateBrowserSession(): Promise<{ csrf_token: string; expires_at: string }> {
+    return sessionRotationSchema.parse(await this.client.request('/auth/session/rotate', { method: 'POST' }));
   }
 
   async completeFile(fileId: string): Promise<FileAttachment> {

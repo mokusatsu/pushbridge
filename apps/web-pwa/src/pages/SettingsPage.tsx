@@ -1,14 +1,15 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ApiClient } from '@/api/client';
 import { apiErrorMessage } from '@/api/errors';
 import { LocalApi } from '@/api/localApi';
 import { clearClientSettings, saveClientSettings } from '@/config';
 import { Icon } from '@/components/Icon';
 import { PageHeader } from '@/components/PageHeader';
+import { TurnstileWidget } from '@/components/TurnstileWidget';
 import { webPushSupport } from '@/services/webPush';
-import { authenticatePasskey, passkeysSupported, registerPasskey } from '@/services/passkeys';
+import { authenticatePasskey, getPasskeyConfig, passkeysSupported, registerPasskey } from '@/services/passkeys';
 import { useAppRuntime, useAppSnapshot } from '@/state/AppContext';
-import type { AuthMode, ClientSettings, WebPushSubscriptionRecord } from '@/types';
+import type { AuthMode, ClientSettings, PasskeyPublicConfig, WebPushSubscriptionRecord } from '@/types';
 import { formatBytes, formatDateTime } from '@/utils/format';
 
 function validApiBase(value: string): boolean {
@@ -45,9 +46,14 @@ export function SettingsPage() {
   const [bootstrapDeviceName, setBootstrapDeviceName] = useState(() => `PWA ${navigator.platform || 'Browser'}`);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeyConfig, setPasskeyConfig] = useState<PasskeyPublicConfig | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [linkToken, setLinkToken] = useState('');
+  const [redeemingLink, setRedeemingLink] = useState(false);
   const [webPushBusy, setWebPushBusy] = useState(false);
   const pushSupport = webPushSupport();
   const passkeyBrowserSupported = passkeysSupported();
+  const acceptTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
 
   const update = <K extends keyof ClientSettings>(key: K, value: ClientSettings[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -142,6 +148,19 @@ export function SettingsPage() {
 
   const passkeyApi = () => new ApiClient({ ...normalizedSettings(), authMode: 'none', bearerToken: '', csrfToken: '' });
 
+  useEffect(() => {
+    if (!snapshot.capabilities?.features.passkey_authentication) return;
+    let cancelled = false;
+    void getPasskeyConfig(passkeyApi()).then((value) => {
+      if (!cancelled) setPasskeyConfig(value);
+    }).catch((error) => {
+      if (!cancelled) setFormError(apiErrorMessage(error));
+    });
+    return () => { cancelled = true; };
+  // The endpoint is public and only needs to be refreshed when the advertised feature changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.capabilities?.features.passkey_authentication]);
+
   const createPasskeyAccount = async () => {
     setFormError('');
     if (!passkeyBrowserSupported) { setFormError('このブラウザーはPasskeyに対応していません。'); return; }
@@ -150,7 +169,11 @@ export function SettingsPage() {
     }
     setPasskeyBusy(true);
     try {
-      const result = await registerPasskey(passkeyApi(), { handle: bootstrapHandle.trim(), device_name: bootstrapDeviceName.trim() });
+      if (passkeyConfig?.turnstile_required && !turnstileToken) throw new Error('Turnstileの確認を完了してください。');
+      const result = await registerPasskey(passkeyApi(), {
+        handle: bootstrapHandle.trim(), device_name: bootstrapDeviceName.trim(),
+        ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
+      });
       if (!result.user || !result.device) throw new Error('Passkey登録応答にユーザーまたは端末がありません。');
       saveClientSettings({
         ...normalizedSettings(), authMode: 'cookie', bearerToken: '', csrfToken: result.csrf_token,
@@ -181,6 +204,21 @@ export function SettingsPage() {
       clearClientSettings();
       window.location.reload();
     } catch (error) { setFormError(apiErrorMessage(error)); } finally { setPasskeyBusy(false); }
+  };
+
+  const redeemDeviceLink = async () => {
+    setFormError('');
+    if (!linkToken.trim()) { setFormError('端末リンクTokenを入力してください。'); return; }
+    setRedeemingLink(true);
+    try {
+      const unauthenticated: ClientSettings = { ...normalizedSettings(), authMode: 'none', bearerToken: '', csrfToken: '' };
+      const result = await new LocalApi(new ApiClient(unauthenticated)).redeemDeviceLink(linkToken.trim());
+      saveClientSettings({
+        ...normalizedSettings(), authMode: 'bearer', bearerToken: result.access_token, csrfToken: '',
+        rememberBearerToken: true, currentDeviceId: result.device.id,
+      });
+      window.location.reload();
+    } catch (error) { setFormError(apiErrorMessage(error)); } finally { setRedeemingLink(false); }
   };
 
   const requestNotifications = async () => {
@@ -243,8 +281,20 @@ export function SettingsPage() {
               <button className="button button-primary" type="button" disabled={passkeyBusy || !passkeyBrowserSupported} onClick={() => void loginWithPasskey()}>{passkeyBusy ? '確認中…' : 'Passkeyでログイン'}</button>
               <button className="button button-secondary" type="button" disabled={passkeyBusy || !passkeyBrowserSupported} onClick={() => void createPasskeyAccount()}>新規Passkeyを登録</button>
             </div>
+            {passkeyConfig?.turnstile_required && passkeyConfig.turnstile_site_key && (
+              <TurnstileWidget siteKey={passkeyConfig.turnstile_site_key} onToken={acceptTurnstileToken} />
+            )}
+            {passkeyConfig?.turnstile_required && !passkeyConfig.turnstile_site_key && (
+              <div className="form-error" role="alert">Turnstile Site Keyが設定されていないため、新規登録を開始できません。</div>
+            )}
           </section>
         )}
+        <section className="section-card settings-form device-link-redeem">
+          <div className="section-heading"><div><span className="page-eyebrow">LINK THIS DEVICE</span><h2>承認済み端末として接続</h2></div><span className="status-chip">一回限り</span></div>
+          <p className="muted-copy">既存端末で発行した10分間有効なTokenを入力します。成功後は同じTokenを再利用できません。</p>
+          <label className="field"><span>端末リンクToken</span><input type="password" value={linkToken} onChange={(event) => setLinkToken(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+          <div className="settings-actions align-start"><button className="button button-primary" type="button" disabled={redeemingLink || !linkToken.trim()} onClick={() => void redeemDeviceLink()}>{redeemingLink ? '接続中…' : 'この端末で使用'}</button></div>
+        </section>
         <section className="section-card settings-form relaymock-bootstrap">
           <div className="section-heading"><div><span className="page-eyebrow">FIRST CONNECTION</span><h2>RelayMockをBootstrap</h2></div><span className="status-chip">開発専用</span></div>
           <p className="muted-copy">ユーザー、現在のPWA端末、端末スコープのBearer Tokenを一括作成します。この操作は外部公開環境では使用しないでください。</p>
