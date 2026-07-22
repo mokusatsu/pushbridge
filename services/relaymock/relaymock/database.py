@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS pushes (
     type TEXT NOT NULL,
     file_id TEXT REFERENCES files(id),
     payload_version INTEGER NOT NULL DEFAULT 1,
+    key_version INTEGER,
+    encryption_salt TEXT,
     payload_json TEXT,
     ciphertext TEXT,
     nonce TEXT,
@@ -69,6 +71,7 @@ CREATE TABLE IF NOT EXISTS files (
     content_type TEXT NOT NULL,
     expected_size INTEGER NOT NULL,
     actual_size INTEGER,
+    e2ee INTEGER NOT NULL DEFAULT 0,
     expected_sha256 TEXT,
     actual_sha256 TEXT,
     state TEXT NOT NULL,
@@ -149,6 +152,13 @@ class Database:
                 conn.execute("ALTER TABLE files ADD COLUMN delete_reason TEXT")
             if "alias_expires_at" not in columns:
                 conn.execute("ALTER TABLE files ADD COLUMN alias_expires_at TEXT")
+            if "e2ee" not in columns:
+                conn.execute("ALTER TABLE files ADD COLUMN e2ee INTEGER NOT NULL DEFAULT 0")
+            push_columns = {row["name"] for row in conn.execute("PRAGMA table_info(pushes)")}
+            if "key_version" not in push_columns:
+                conn.execute("ALTER TABLE pushes ADD COLUMN key_version INTEGER")
+            if "encryption_salt" not in push_columns:
+                conn.execute("ALTER TABLE pushes ADD COLUMN encryption_salt TEXT")
             subscription_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(web_push_subscriptions)")
             }

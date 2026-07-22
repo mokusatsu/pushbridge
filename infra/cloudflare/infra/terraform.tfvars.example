@@ -17,6 +17,7 @@ require_passkey_turnstile   = true
 auth_rate_limit             = 20
 account_auth_rate_limit     = 20
 device_mutation_rate_limit  = 300
+require_e2ee                = false
 
 # Protect the complete hostname (Worker API and Static Assets) with Cloudflare
 # Access. Use /32 for one IPv4 address. Set access_ip_allowlist = null to disable.

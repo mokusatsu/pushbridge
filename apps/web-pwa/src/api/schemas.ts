@@ -74,6 +74,7 @@ const fileWireSchema = z.object({
   deleted_at: nullableString,
   delete_reason: fileDeleteReasonSchema.nullable().optional().default(null),
   alias_expires_at: nullableString.optional().default(null),
+  e2ee: z.boolean().optional().default(false),
 }).strict();
 
 export const fileAttachmentSchema = fileWireSchema.transform((value): FileAttachment => ({
@@ -87,6 +88,7 @@ export const fileAttachmentSchema = fileWireSchema.transform((value): FileAttach
   deleted_at: value.deleted_at,
   delete_reason: value.delete_reason,
   alias_expires_at: value.alias_expires_at,
+  e2ee: value.e2ee,
 }));
 
 const fileRefWireSchema = z.object({
@@ -116,6 +118,8 @@ const pushWireSchema = z.object({
   file_id: nullableString,
   file_ref: fileRefWireSchema.nullable().optional().default(null),
   payload_version: z.number().int().positive(),
+  key_version: z.number().int().positive().nullable().optional().default(null),
+  encryption_salt: nullableString.optional().default(null),
   payload: payloadSchema.nullable(),
   ciphertext: nullableString,
   nonce: nullableString,
@@ -179,6 +183,10 @@ export const pushSchema = pushWireSchema.transform((value): PushRecord => {
     source_device_id: value.source_device_id,
     target: value.target,
     payload_version: value.payload_version,
+    key_version: value.key_version,
+    encryption_salt: value.encryption_salt,
+    ciphertext: value.ciphertext,
+    nonce: value.nonce,
     title: stringValue(payload?.title) ?? null,
     body: stringValue(payload?.body) ?? null,
     url: stringValue(payload?.url) ?? null,

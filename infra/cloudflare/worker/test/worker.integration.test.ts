@@ -38,6 +38,7 @@ interface FileInitResult {
 
 const worker = (workerExports as unknown as { default: { fetch(request: Request): Promise<Response> } }).default;
 let sequence = 0;
+const DEVICE_PUBLIC_KEY = `p256.${"A".repeat(87)}`;
 
 function unique(prefix: string): string {
   sequence += 1;
@@ -56,7 +57,7 @@ async function bootstrap(sourceIp = `198.51.100.${sequence + 1}`): Promise<Boots
   const response = await call("/api/v1/auth/bootstrap", {
     method: "POST",
     headers: { "content-type": "application/json", "cf-connecting-ip": sourceIp },
-    body: JSON.stringify({ handle: unique("user"), device_name: "Test device", device_kind: "pwa", public_key: "test-key" }),
+    body: JSON.stringify({ handle: unique("user"), device_name: "Test device", device_kind: "pwa", public_key: DEVICE_PUBLIC_KEY }),
   });
   expect(response.status).toBe(201);
   return response.json<BootstrapResult>();
@@ -273,7 +274,7 @@ describe("Worker runtime integration", () => {
       const response = await call("/api/v1/device-links", {
         method: "POST",
         headers: auth(owner.access_token, { "content-type": "application/json" }),
-        body: JSON.stringify({ name, kind: "pwa", public_key: "fixture-key" }),
+        body: JSON.stringify({ name, kind: "pwa", public_key: DEVICE_PUBLIC_KEY }),
       });
       expect(response.status).toBe(201);
       return response.json<{ id: string; link_token: string; status: string }>();
@@ -344,6 +345,124 @@ describe("Worker runtime integration", () => {
     });
     expect(deviceLimited.status).toBe(429);
     expect((await deviceLimited.json<{ detail: { code: string } }>()).detail.code).toBe("device_rate_limited");
+  });
+
+  it("stores opaque account/recovery envelopes and refuses revoked or cross-account device targets", async () => {
+    const owner = await bootstrap("198.51.100.219");
+    const recovery = { v: 1, alg: "A256GCM-HKDF-SHA256", key_version: 1, kind: "recovery", salt: "fixture", nonce: "fixture", ciphertext: "fixture" };
+    const currentEnvelope = { v: 1, alg: "A256GCM-HKDF-SHA256", key_version: 1, recipient_device_id: owner.device.id,
+      ephemeral_public_key: "p256.fixture", salt: "fixture", nonce: "fixture", ciphertext: "fixture" };
+    const initialized = await call("/api/v1/e2ee/account-key", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ key_version: 1, recovery_envelope: recovery, device_envelope: currentEnvelope }),
+    });
+    expect(initialized.status).toBe(201);
+    expect((await call("/api/v1/e2ee/account-key", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ key_version: 1, recovery_envelope: recovery, device_envelope: currentEnvelope }),
+    })).status).toBe(409);
+    expect(await (await call("/api/v1/e2ee/status", { headers: auth(owner.access_token) })).json())
+      .toEqual(expect.objectContaining({ initialized: true, current_key_version: 1, current_device_has_envelope: true }));
+    expect(await (await call("/api/v1/e2ee/device-envelope", { headers: auth(owner.access_token) })).json())
+      .toEqual(expect.objectContaining({ key_version: 1, envelope: currentEnvelope }));
+    expect(await (await call("/api/v1/e2ee/recovery-envelope", { headers: auth(owner.access_token) })).json())
+      .toEqual(expect.objectContaining({ key_version: 1, envelope: recovery }));
+
+    const linkedResponse = await call("/api/v1/devices/link", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ name: "Encrypted peer", kind: "pwa", public_key: DEVICE_PUBLIC_KEY }),
+    });
+    const linked = await linkedResponse.json<{ device: { id: string } }>();
+    const peerEnvelope = { ...currentEnvelope, recipient_device_id: linked.device.id, ciphertext: "peer-fixture" };
+    const put = () => call(`/api/v1/e2ee/device-envelopes/${linked.device.id}`, {
+      method: "PUT",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ key_version: 1, envelope: peerEnvelope }),
+    });
+    expect((await put()).status).toBe(201);
+    expect((await put()).status).toBe(200);
+    const changedEnvelope = { ...peerEnvelope, ciphertext: "different" };
+    expect((await call(`/api/v1/e2ee/device-envelopes/${linked.device.id}`, {
+      method: "PUT",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ key_version: 1, envelope: changedEnvelope }),
+    })).status).toBe(409);
+    await env.DB.prepare("UPDATE devices SET revoked_at = ? WHERE id = ?").bind(Date.now(), linked.device.id).run();
+    expect((await put()).status).toBe(404);
+
+    const stranger = await bootstrap("198.51.100.220");
+    expect((await call(`/api/v1/e2ee/device-envelopes/${stranger.device.id}`, {
+      method: "PUT",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ key_version: 1, envelope: { ...peerEnvelope, recipient_device_id: stranger.device.id } }),
+    })).status).toBe(404);
+  });
+
+  it("stores payload_version 2 ciphertext without plaintext and can require E2EE", async () => {
+    const owner = await bootstrap("198.51.100.221");
+    const clientGuid = unique("encrypted");
+    const encryptedBody = {
+      type: "note",
+      target: { kind: "all_other_devices" },
+      payload_version: 2,
+      key_version: 1,
+      encryption_salt: "c2FsdF9maXh0dXJl",
+      nonce: "bm9uY2VfZml4dHVyZQ",
+      ciphertext: "Y2lwaGVydGV4dF9maXh0dXJl",
+      client_guid: clientGuid,
+    };
+    const created = await call("/api/v1/pushes", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json", "idempotency-key": clientGuid }),
+      body: JSON.stringify(encryptedBody),
+    });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual(expect.objectContaining({
+      payload_version: 2,
+      key_version: 1,
+      encryption_salt: encryptedBody.encryption_salt,
+      nonce: encryptedBody.nonce,
+      ciphertext: encryptedBody.ciphertext,
+      payload: null,
+    }));
+    const stored = await env.DB.prepare(`SELECT payload_json, key_version, encryption_salt, ciphertext, nonce
+      FROM pushes WHERE user_id = ? AND client_guid = ?`).bind(owner.user.id, clientGuid)
+      .first<{ payload_json: string | null; key_version: number; encryption_salt: string; ciphertext: string; nonce: string }>();
+    expect(stored).toEqual({ payload_json: null, key_version: 1, encryption_salt: encryptedBody.encryption_salt,
+      ciphertext: encryptedBody.ciphertext, nonce: encryptedBody.nonce });
+    expect((await call("/api/v1/pushes", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json", "idempotency-key": clientGuid }),
+      body: JSON.stringify(encryptedBody),
+    })).headers.get("idempotent-replayed")).toBe("true");
+
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (request: Request<unknown, any>, workerEnv: Env, ctx: ExecutionContext) => Promise<Response>;
+    const plaintext = request("/api/v1/pushes", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ type: "note", target: { kind: "all_other_devices" }, payload: { title: "must not persist" } }),
+    });
+    const rejected = await fetchHandler(plaintext, { ...env, REQUIRE_E2EE: "true" }, {} as ExecutionContext);
+    expect(rejected.status).toBe(422);
+    expect((await rejected.json<{ detail: { code: string } }>()).detail.code).toBe("e2ee_required");
+    const plaintextFile = await fetchHandler(request("/api/v1/files/init", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ filename: "leaked-name.txt", content_type: "text/plain", size: 0 }),
+    }), { ...env, REQUIRE_E2EE: "true" }, {} as ExecutionContext);
+    expect(plaintextFile.status).toBe(422);
+    const encryptedFile = await fetchHandler(request("/api/v1/files/init", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ filename: "encrypted.bin", content_type: "application/octet-stream", size: 0, encrypted: true }),
+    }), { ...env, REQUIRE_E2EE: "true" }, {} as ExecutionContext);
+    expect(encryptedFile.status).toBe(201);
+    const encryptedFileBody = await encryptedFile.json<{ file: { id: string; original_name: string; e2ee: boolean } }>();
+    expect(encryptedFileBody.file).toEqual(expect.objectContaining({ original_name: "encrypted.bin", e2ee: true }));
   });
 
   it("uses D1, R2, and Durable Object bindings", async () => {

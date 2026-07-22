@@ -1,6 +1,7 @@
 import { authenticate, bootstrap } from "./auth";
 import { currentDevice, linkDevice, listDevices, mutateDevice } from "./devices";
 import { createDeviceLink, deviceLinkStatus, redeemDeviceLink } from "./device-links";
+import { currentDeviceEnvelope, e2eeStatus, initializeAccountKey, putCurrentDeviceKey, putDeviceEnvelope, recoveryEnvelope } from "./e2ee";
 import { handlePublicDeliveryRoute, listFileDeliveries } from "./deliveries";
 import { handleFileRoute, handlePublicFileRoute, storageUsage } from "./files";
 import {
@@ -67,6 +68,13 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       if (sessionMatch && request.method === "DELETE") return revokeBrowserSession(decodeURIComponent(sessionMatch[1]), env, auth, requestId, runtime);
       if (request.method === "GET" && path === "/v1/devices") return json(await listDevices(env, auth), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/devices/me") return json(await currentDevice(env, auth), { headers: { "x-request-id": requestId } });
+      if (request.method === "GET" && path === "/v1/e2ee/status") return e2eeStatus(env, auth, requestId);
+      if (request.method === "PUT" && path === "/v1/e2ee/device-key") return putCurrentDeviceKey(request, env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/e2ee/account-key") return initializeAccountKey(request, env, auth, requestId, runtime);
+      if (request.method === "GET" && path === "/v1/e2ee/device-envelope") return currentDeviceEnvelope(env, auth, requestId);
+      if (request.method === "GET" && path === "/v1/e2ee/recovery-envelope") return recoveryEnvelope(env, auth, requestId);
+      const deviceEnvelopeMatch = path.match(/^\/v1\/e2ee\/device-envelopes\/([^/]+)$/);
+      if (deviceEnvelopeMatch && request.method === "PUT") return putDeviceEnvelope(request, env, auth, requestId, decodeURIComponent(deviceEnvelopeMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/device-links") return createDeviceLink(request, env, auth, requestId, runtime);
       const deviceLinkMatch = path.match(/^\/v1\/device-links\/([^/]+)$/);
       if (deviceLinkMatch && request.method === "GET") return deviceLinkStatus(env, auth, requestId, decodeURIComponent(deviceLinkMatch[1]), runtime);

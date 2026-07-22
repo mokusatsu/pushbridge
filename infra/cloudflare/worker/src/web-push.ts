@@ -191,6 +191,7 @@ async function decryptSubscription(row: SubscriptionRow, dataKey: string): Promi
 interface DeliveryFileRow extends FileDeliveryRow {
   actual_size: number | null;
   expected_size: number;
+  e2ee: number;
 }
 
 function deliveryPayload(
@@ -210,6 +211,7 @@ function deliveryPayload(
       file_id: row.file_id,
       size: Number(row.actual_size ?? row.expected_size),
       mime_type: "application/octet-stream",
+      encrypted: Boolean(row.e2ee),
       download_url: downloadUrl,
     },
     file_delivery: {
@@ -262,7 +264,7 @@ export async function deliverFilePush(
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
   if (!webPushDeliveryConfigured(env)) return;
-  const deliveries = await env.DB.prepare(`SELECT d.*, f.actual_size, f.expected_size
+  const deliveries = await env.DB.prepare(`SELECT d.*, f.actual_size, f.expected_size, f.e2ee
     FROM file_deliveries d JOIN files f ON f.id = d.file_id
     WHERE d.push_id = ? AND d.state IN ('pending', 'failed_retryable') AND d.attempt_count < ?
     ORDER BY d.id`).bind(pushId, DELIVERY_ATTEMPT_LIMIT).all<DeliveryFileRow>();

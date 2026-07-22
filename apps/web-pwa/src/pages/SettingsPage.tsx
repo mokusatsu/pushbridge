@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { TurnstileWidget } from '@/components/TurnstileWidget';
 import { webPushSupport } from '@/services/webPush';
 import { authenticatePasskey, getPasskeyConfig, passkeysSupported, registerPasskey } from '@/services/passkeys';
+import { ensureDeviceIdentity } from '@/services/deviceIdentity';
 import { useAppRuntime, useAppSnapshot } from '@/state/AppContext';
 import type { AuthMode, ClientSettings, PasskeyPublicConfig, WebPushSubscriptionRecord } from '@/types';
 import { formatBytes, formatDateTime } from '@/utils/format';
@@ -103,10 +104,12 @@ export function SettingsPage() {
         bearerToken: '',
       };
       const api = new LocalApi(new ApiClient(unauthenticated));
+      const identity = await ensureDeviceIdentity();
       const result = await api.bootstrap({
         handle: bootstrapHandle.trim(),
         device_name: bootstrapDeviceName.trim(),
         device_kind: 'pwa',
+        public_key: identity.publicKey,
       });
       saveClientSettings({
         ...normalizedSettings(),
@@ -172,6 +175,7 @@ export function SettingsPage() {
       if (passkeyConfig?.turnstile_required && !turnstileToken) throw new Error('Turnstileの確認を完了してください。');
       const result = await registerPasskey(passkeyApi(), {
         handle: bootstrapHandle.trim(), device_name: bootstrapDeviceName.trim(),
+        device_public_key: (await ensureDeviceIdentity()).publicKey,
         ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
       });
       if (!result.user || !result.device) throw new Error('Passkey登録応答にユーザーまたは端末がありません。');
@@ -212,10 +216,12 @@ export function SettingsPage() {
     setRedeemingLink(true);
     try {
       const unauthenticated: ClientSettings = { ...normalizedSettings(), authMode: 'none', bearerToken: '', csrfToken: '' };
-      const result = await new LocalApi(new ApiClient(unauthenticated)).redeemDeviceLink(linkToken.trim());
+      const identity = await ensureDeviceIdentity();
+      const result = await new LocalApi(new ApiClient(unauthenticated)).redeemDeviceLink(linkToken.trim(), identity.publicKey);
       saveClientSettings({
         ...normalizedSettings(), authMode: 'bearer', bearerToken: result.access_token, csrfToken: '',
         rememberBearerToken: true, currentDeviceId: result.device.id,
+        ...(result.device.user_id ? { storageNamespace: safeNamespace(`pushbridge-${result.device.user_id}`) } : {}),
       });
       window.location.reload();
     } catch (error) { setFormError(apiErrorMessage(error)); } finally { setRedeemingLink(false); }
@@ -427,6 +433,14 @@ export function SettingsPage() {
           </>
         ) : <p className="muted-copy">認証後の同期でサーバー使用量を取得します。古いAPIではこの表示を利用できません。</p>}
       </section>
+
+      {snapshot.capabilities?.features.e2ee && (
+        <section className="section-card settings-form">
+          <div className="section-heading"><div><span className="page-eyebrow">END-TO-END ENCRYPTION</span><h2>回復キー</h2></div><span className="status-chip">端末内のみ</span></div>
+          <p className="muted-copy">初期作成端末で一度コピーし、パスワード管理ツール等へ保管してください。サーバーは回復キーも平文のアカウント鍵も保持しません。</p>
+          <div className="settings-actions align-start"><button className="button button-secondary" type="button" onClick={() => void runtime.copyRecoveryKey().catch((error) => setFormError(apiErrorMessage(error)))}>回復キーをコピー</button></div>
+        </section>
+      )}
 
       <section className="section-card">
         <div className="section-heading"><div><span className="page-eyebrow">CAPABILITIES</span><h2>サーバー機能</h2></div><button className="button button-ghost button-small" type="button" onClick={() => void runtime.testConnection()}>再取得</button></div>

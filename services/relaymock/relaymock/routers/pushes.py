@@ -107,6 +107,8 @@ def create_push(
             "type": body.type,
             "file_id": referenced_file_id,
             "payload_version": body.payload_version,
+            "key_version": body.key_version,
+            "encryption_salt": body.encryption_salt,
             "payload": payload_data,
             "ciphertext": body.ciphertext,
             "nonce": body.nonce,
@@ -169,10 +171,10 @@ def create_push(
                 """
                 INSERT INTO pushes(
                     id, user_id, source_device_id, target_kind, target_device_id,
-                    type, file_id, payload_version, payload_json, ciphertext, nonce,
+                    type, file_id, payload_version, key_version, encryption_salt, payload_json, ciphertext, nonce,
                     client_guid, request_hash, pinned, created_at, modified_at, expires_at,
                     expired_at, dismissed_at, deleted_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, NULL)
                 """,
                 (
                     push_id,
@@ -183,6 +185,8 @@ def create_push(
                     body.type,
                     referenced_file_id,
                     body.payload_version,
+                    body.key_version,
+                    body.encryption_salt,
                     payload_json,
                     body.ciphertext,
                     body.nonce,

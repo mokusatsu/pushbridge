@@ -1,5 +1,6 @@
 import { sha256Hex } from "./crypto";
 import { deviceOut } from "./devices";
+import { validDevicePublicKey } from "./device-key";
 import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, DeviceRow, Env, Runtime } from "./types";
@@ -146,6 +147,9 @@ export async function bootstrap(request: Request, env: Env, requestId: string, r
   const requestedKind = body.device_kind === "browser_extension" ? "extension" : typeof body.device_kind === "string" ? body.device_kind : "pwa";
   const kind = ["web", "pwa", "extension"].includes(requestedKind) ? requestedKind : "pwa";
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  if ((publicKey && !validDevicePublicKey(publicKey)) || (env.REQUIRE_E2EE === "true" && !publicKey)) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   await env.DB.batch([
     env.DB.prepare("INSERT INTO users (id, handle, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(userId, body.handle, now, now),
     env.DB.prepare(`INSERT INTO devices

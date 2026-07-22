@@ -6,6 +6,7 @@ import type {
   ClientSettings,
   Device,
   DeviceLinkGrant,
+  ChangeEvent,
   FileAttachment,
   OutboxJob,
   PushRecord,
@@ -21,6 +22,21 @@ import { subscribeDataChanged } from '@/storage/events';
 import { formatBytes, safeFilename } from '@/utils/format';
 import { newId } from '@/utils/id';
 import { decodeVapidPublicKey, getActiveServiceWorkerRegistration, subscriptionToInput, webPushSupport } from './webPush';
+import { ensureDeviceIdentity } from './deviceIdentity';
+import {
+  decryptFile,
+  decryptPushPayload,
+  encodeBase64Url,
+  encryptFile,
+  encryptPushPayload,
+  generateAccountKey,
+  generateRecoveryKey,
+  wrapAccountKeyForDevice,
+  wrapAccountKeyForRecovery,
+  unwrapAccountKeyForDevice,
+  type ContentEnvelopeV1,
+  type DeviceEnvelopeV1,
+} from './e2ee';
 
 const DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_FILE_TTL_SECONDS = 2_592_000;
@@ -102,6 +118,7 @@ export class AppRuntime {
   private syncDebounceTimer?: number;
   private websocket?: WebSocket;
   private reconnectAttempts = 0;
+  private accountKey?: { version: number; bytes: Uint8Array };
 
   private readonly onlineHandler = () => {
     this.patch({ connection: 'checking' });
@@ -228,6 +245,8 @@ export class AppRuntime {
       }));
       await this.db.replaceDevices(normalizedDevices);
 
+      if (capabilities.features.e2ee) await this.ensureE2ee(currentDevice);
+
       if (this.settings.currentDeviceId !== currentDevice.id) {
         this.settings.currentDeviceId = currentDevice.id;
         saveClientSettings(this.settings);
@@ -236,6 +255,7 @@ export class AppRuntime {
       let cursor = await this.db.getCursor();
       for (let page = 0; page < MAX_SYNC_PAGES; page += 1) {
         const changes = await this.api.getChanges(cursor, 100);
+        changes.items = await Promise.all(changes.items.map((change) => this.decryptChange(change)));
         const nextCursor = changes.next_cursor ?? cursor;
         await this.db.applyChanges(changes.items, nextCursor);
         if (this.settings.autoCacheReceivedFiles) {
@@ -365,14 +385,19 @@ export class AppRuntime {
             const expiresIn = job.draft.expires_in
               ?? this.snapshot.capabilities?.limits.default_file_ttl_seconds
               ?? DEFAULT_FILE_TTL_SECONDS;
+            const encrypted = this.snapshot.capabilities?.features.e2ee === true;
             const init = await this.api.initFile({
-              name: job.file.name,
-              mime_type: job.file.mime_type,
-              size: job.file.size,
+              name: encrypted ? 'encrypted.bin' : job.file.name,
+              mime_type: encrypted ? 'application/octet-stream' : job.file.mime_type,
+              size: encrypted ? job.file.size + 53 : job.file.size,
               expires_in: expiresIn,
-              sha256: await sha256Hex(job.file.blob),
+              sha256: encrypted ? undefined : await sha256Hex(job.file.blob),
+              encrypted,
             });
-            await this.api.uploadFile(init, job.file.blob, {
+            const uploadBlob = encrypted
+              ? new Blob([await encryptFile(this.requireAccountKey().bytes, this.requireAccountKey().version, init.file_id, await job.file.blob.arrayBuffer())], { type: 'application/octet-stream' })
+              : job.file.blob;
+            await this.api.uploadFile(init, uploadBlob, {
               signal: controller.signal,
               onProgress: (loaded, total) => this.updateUploadProgress(job.id, loaded, total),
             });
@@ -384,12 +409,42 @@ export class AppRuntime {
           }
         }
 
-        const push = await this.api.createPush({
+        const logicalFile = job.uploaded_file && job.file ? {
+          ...job.uploaded_file,
+          name: job.file.name,
+          mime_type: job.file.mime_type,
+          size: job.file.size,
+          client_file_id: job.uploaded_file.id,
+          e2ee: this.snapshot.capabilities?.features.e2ee === true,
+        } : job.uploaded_file;
+        const request = {
           ...job.draft,
           client_guid: job.id,
           source_device_id: this.settings.currentDeviceId,
-          ...(job.uploaded_file ? { file_id: job.uploaded_file.id, file: job.uploaded_file } : {}),
-        }, job.id);
+          ...(logicalFile ? { file_id: logicalFile.id, file: logicalFile } : {}),
+        };
+        let push: PushRecord;
+        if (this.snapshot.capabilities?.features.e2ee) {
+          const key = this.requireAccountKey();
+          const payload = {
+            ...(job.draft.title ? { title: job.draft.title } : {}),
+            ...(job.draft.body ? { body: job.draft.body } : {}),
+            ...(job.draft.url ? { url: job.draft.url } : {}),
+            ...(logicalFile ? { file: {
+              name: logicalFile.name, mime_type: logicalFile.mime_type, size: logicalFile.size,
+              client_file_id: logicalFile.client_file_id, sha256: logicalFile.sha256 ?? null,
+              expires_at: logicalFile.expires_at ?? null,
+            } } : {}),
+          };
+          const envelope = await encryptPushPayload(key.bytes, key.version, job.draft.type, job.id, payload);
+          push = await this.api.createPush({
+            ...request, payload_version: 2, key_version: envelope.key_version,
+            encryption_salt: envelope.salt, ciphertext: envelope.ciphertext, nonce: envelope.nonce,
+          }, job.id);
+          push = await this.decryptPush(push);
+        } else {
+          push = await this.api.createPush(request, job.id);
+        }
         await this.db.putPush(push, false);
         await this.db.deleteOutbox(job.id, false);
         sentAny = true;
@@ -435,6 +490,80 @@ export class AppRuntime {
     if (navigator.onLine) void this.processOutbox();
   }
 
+  private async ensureE2ee(currentDevice: Device): Promise<void> {
+    const identity = await ensureDeviceIdentity();
+    await this.api.putCurrentDeviceKey(identity.publicKey);
+    let status = await this.api.getE2eeStatus();
+    let local = await this.db.getAccountKey();
+
+    if (!status.initialized) {
+      const keyBytes = local?.key_bytes ?? generateAccountKey();
+      const recoveryBytes = local?.recovery_key_bytes ?? generateRecoveryKey();
+      const version = 1;
+      await this.api.initializeAccountKey({
+        key_version: version,
+        recovery_envelope: await wrapAccountKeyForRecovery(keyBytes, recoveryBytes, version),
+        device_envelope: await wrapAccountKeyForDevice(keyBytes, version, currentDevice.id, identity.publicKey),
+      });
+      await this.db.putAccountKey({ key_version: version, key_bytes: keyBytes, recovery_key_bytes: recoveryBytes, created_at: nowIso() });
+      local = await this.db.getAccountKey();
+      status = await this.api.getE2eeStatus();
+    }
+
+    if (!status.current_key_version) throw new Error('E2EE account key version is unavailable.');
+    if (!local || local.key_version !== status.current_key_version) {
+      const response = await this.api.getCurrentDeviceEnvelope<DeviceEnvelopeV1>();
+      const keyBytes = await unwrapAccountKeyForDevice(response.envelope, identity.privateKey);
+      await this.db.putAccountKey({ key_version: response.key_version, key_bytes: keyBytes, created_at: nowIso() });
+      local = await this.db.getAccountKey();
+    }
+    if (!local) throw new Error('E2EE account key is unavailable.');
+    this.accountKey = { version: local.key_version, bytes: local.key_bytes };
+
+    for (const device of status.devices) {
+      if (device.has_envelope || device.id === currentDevice.id || !device.public_key.startsWith('p256.')) continue;
+      const envelope = await wrapAccountKeyForDevice(local.key_bytes, local.key_version, device.id, device.public_key);
+      await this.api.putDeviceEnvelope(device.id, local.key_version, envelope);
+    }
+  }
+
+  private requireAccountKey(): { version: number; bytes: Uint8Array } {
+    if (!this.accountKey) throw new Error('E2EE鍵を準備できていません。同期後に再試行してください。');
+    return this.accountKey;
+  }
+
+  private async decryptChange(change: ChangeEvent): Promise<ChangeEvent> {
+    if (change.type !== 'push.upsert' || !change.push) return change;
+    return { ...change, push: await this.decryptPush(change.push) };
+  }
+
+  private async decryptPush(push: PushRecord): Promise<PushRecord> {
+    if (push.payload_version !== 2) return push;
+    const key = this.requireAccountKey();
+    if (!push.key_version || !push.encryption_salt || !push.nonce || !push.ciphertext) throw new Error('暗号化Push envelopeが不完全です。');
+    const payload = await decryptPushPayload(key.bytes, push.type, push.client_guid, {
+      v: 1, alg: 'A256GCM-HKDF-SHA256', key_version: push.key_version,
+      salt: push.encryption_salt, nonce: push.nonce, ciphertext: push.ciphertext,
+    });
+    const nested = payload.file && typeof payload.file === 'object' ? payload.file as Record<string, unknown> : undefined;
+    const file = push.file_id && nested ? {
+      ...push.file,
+      id: push.file_id,
+      name: typeof nested.name === 'string' ? nested.name : `ファイル ${push.file_id}`,
+      mime_type: typeof nested.mime_type === 'string' ? nested.mime_type : 'application/octet-stream',
+      size: typeof nested.size === 'number' ? nested.size : 0,
+      client_file_id: typeof nested.client_file_id === 'string' ? nested.client_file_id : undefined,
+      e2ee: true,
+    } : push.file;
+    return {
+      ...push,
+      title: typeof payload.title === 'string' ? payload.title : null,
+      body: typeof payload.body === 'string' ? payload.body : null,
+      url: typeof payload.url === 'string' ? payload.url : null,
+      file,
+    };
+  }
+
   cancelOutbox(jobId: string): void {
     this.uploadControllers.get(jobId)?.abort();
   }
@@ -472,7 +601,7 @@ export class AppRuntime {
     await this.reloadCached();
 
     try {
-      const updated = await this.api.setDismissed(pushId, dismissed);
+      const updated = await this.decryptPush(await this.api.setDismissed(pushId, dismissed));
       await this.db.putPush({ ...updated, file: updated.file ?? original.file });
       await this.reloadCached();
     } catch (error) {
@@ -491,7 +620,7 @@ export class AppRuntime {
     await this.reloadCached();
 
     try {
-      const updated = await this.api.setPinned(pushId, pinned);
+      const updated = await this.decryptPush(await this.api.setPinned(pushId, pinned));
       await this.db.putPush({ ...updated, file: updated.file ?? original.file });
       await this.reloadCached();
     } catch (error) {
@@ -552,7 +681,7 @@ export class AppRuntime {
   async downloadFile(file: FileAttachment): Promise<void> {
     try {
       const local = await this.db.getCachedFile(file.id);
-      const blob = local?.blob ?? await this.downloadRemoteFile(file.id);
+      const blob = local?.blob ?? await this.downloadRemoteFile(file);
       if (!local) {
         const push = this.snapshot.pushes.find((value) => value.file_id === file.id);
         if (push) {
@@ -677,6 +806,13 @@ export class AppRuntime {
     this.notify('success', 'ローカルキャッシュと送信箱を消去しました。');
   }
 
+  async copyRecoveryKey(): Promise<void> {
+    const local = await this.db.getAccountKey();
+    if (!local?.recovery_key_bytes) throw new Error('この端末には回復キーがありません。初期作成端末で確認してください。');
+    await navigator.clipboard.writeText(`pb-rk1.${encodeBase64Url(local.recovery_key_bytes)}`);
+    this.notify('success', '回復キーをクリップボードへコピーしました。安全な場所へ保管してください。');
+  }
+
   async clearCachedFiles(): Promise<void> {
     const pushes = await this.db.listPushes();
     for (const push of pushes) {
@@ -693,9 +829,13 @@ export class AppRuntime {
     await this.reloadCached();
   }
 
-  private async downloadRemoteFile(fileId: string): Promise<Blob> {
-    const ticket = await this.api.getDownloadTicket(fileId);
-    return this.api.client.downloadBlob(ticket.download.url);
+  private async downloadRemoteFile(file: FileAttachment): Promise<Blob> {
+    const ticket = await this.api.getDownloadTicket(file.id);
+    const blob = await this.api.client.downloadBlob(ticket.download.url);
+    if (!file.e2ee) return blob;
+    if (!file.client_file_id) throw new Error('暗号化ファイルのclient_file_idがありません。');
+    const plaintext = await decryptFile(this.requireAccountKey().bytes, file.client_file_id, await blob.arrayBuffer());
+    return new Blob([plaintext], { type: file.mime_type });
   }
 
   private async cacheReceivedFiles(pushes: PushRecord[]): Promise<void> {
@@ -704,7 +844,7 @@ export class AppRuntime {
       if (!file || !push.file_id || push.is_for_current_device === false || file.state !== 'ready') continue;
       if (await this.db.getCachedFile(push.file_id, false)) continue;
       try {
-        const blob = await this.downloadRemoteFile(push.file_id);
+        const blob = await this.downloadRemoteFile(file);
         await this.storeCachedFile(push, file, blob);
       } catch (error) {
         // Best effort: a file can expire or be evicted server-side between sync and download.

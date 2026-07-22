@@ -19,7 +19,7 @@ export function capabilities(env: Env): Record<string, unknown> {
       realtime: false,
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
-      e2ee: false,
+      e2ee: env.REQUIRE_E2EE === "true",
       direct_upload: false,
       device_registration: true,
       passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),

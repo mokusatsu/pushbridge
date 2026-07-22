@@ -122,8 +122,8 @@ var require_build = __commonJS({
     var BASE64_REGEX = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
     var BASE64URL_REGEX = /^[a-zA-Z0-9-_]+$/;
     var Utf8Converter = class {
-      static fromString(text) {
-        const s = unescape(encodeURIComponent(text));
+      static fromString(text2) {
+        const s = unescape(encodeURIComponent(text2));
         const uintArray = new Uint8Array(s.length);
         for (let i = 0; i < s.length; i++) {
           uintArray[i] = s.charCodeAt(i);
@@ -151,11 +151,11 @@ var require_build = __commonJS({
         }
         return res;
       }
-      static fromString(text, littleEndian = false) {
-        const res = new ArrayBuffer(text.length * 2);
+      static fromString(text2, littleEndian = false) {
+        const res = new ArrayBuffer(text2.length * 2);
         const dataView = new DataView(res);
-        for (let i = 0; i < text.length; i++) {
-          dataView.setUint16(i * 2, text.charCodeAt(i), littleEndian);
+        for (let i = 0; i < text2.length; i++) {
+          dataView.setUint16(i * 2, text2.charCodeAt(i), littleEndian);
         }
         return res;
       }
@@ -252,18 +252,18 @@ var require_build = __commonJS({
       static ToBase64Url(data) {
         return this.ToBase64(data).replace(/\+/g, "-").replace(/\//g, "_").replace(/\=/g, "");
       }
-      static FromUtf8String(text, encoding = _Convert.DEFAULT_UTF8_ENCODING) {
+      static FromUtf8String(text2, encoding = _Convert.DEFAULT_UTF8_ENCODING) {
         switch (encoding) {
           case "ascii":
-            return this.FromBinary(text);
+            return this.FromBinary(text2);
           case "utf8":
-            return Utf8Converter.fromString(text);
+            return Utf8Converter.fromString(text2);
           case "utf16":
           case "utf16be":
-            return Utf16Converter.fromString(text);
+            return Utf16Converter.fromString(text2);
           case "utf16le":
           case "usc2":
-            return Utf16Converter.fromString(text, true);
+            return Utf16Converter.fromString(text2, true);
           default:
             throw new Error(`Unknown type of encoding '${encoding}'`);
         }
@@ -284,11 +284,11 @@ var require_build = __commonJS({
             throw new Error(`Unknown type of encoding '${encoding}'`);
         }
       }
-      static FromBinary(text) {
-        const stringLength = text.length;
+      static FromBinary(text2) {
+        const stringLength = text2.length;
         const resultView = new Uint8Array(stringLength);
         for (let i = 0; i < stringLength; i++) {
-          resultView[i] = text.charCodeAt(i);
+          resultView[i] = text2.charCodeAt(i);
         }
         return resultView.buffer;
       }
@@ -334,8 +334,8 @@ var require_build = __commonJS({
       static ToUtf16String(buffer, littleEndian = false) {
         return Utf16Converter.toString(buffer, littleEndian);
       }
-      static FromUtf16String(text, littleEndian = false) {
-        return Utf16Converter.fromString(text, littleEndian);
+      static FromUtf16String(text2, littleEndian = false) {
+        return Utf16Converter.fromString(text2, littleEndian);
       }
       static Base64Padding(base643) {
         const padCount = 4 - base643.length % 4;
@@ -1952,6 +1952,11 @@ async function cleanupExpiredMetadata(env, runtime, requiredBytes = 0) {
   return report;
 }
 
+// infra/cloudflare/worker/src/device-key.ts
+function validDevicePublicKey(value) {
+  return /^p256\.[A-Za-z0-9_-]{87}$/.test(value);
+}
+
 // infra/cloudflare/worker/src/devices.ts
 function deviceOut(row, currentDeviceId) {
   return {
@@ -1987,6 +1992,9 @@ async function linkDevice(request, env, auth, requestId, runtime) {
   const kind2 = body.kind === "browser_extension" ? "extension" : typeof body.kind === "string" ? body.kind : "web";
   if (!["web", "pwa", "extension"].includes(kind2)) return problem(422, "validation_error", "Invalid device kind.", requestId);
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  if (publicKey && !validDevicePublicKey(publicKey) || env.REQUIRE_E2EE === "true" && !publicKey) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
@@ -2134,6 +2142,9 @@ async function bootstrap(request, env, requestId, runtime) {
   const requestedKind = body.device_kind === "browser_extension" ? "extension" : typeof body.device_kind === "string" ? body.device_kind : "pwa";
   const kind2 = ["web", "pwa", "extension"].includes(requestedKind) ? requestedKind : "pwa";
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  if (publicKey && !validDevicePublicKey(publicKey) || env.REQUIRE_E2EE === "true" && !publicKey) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   await env.DB.batch([
     env.DB.prepare("INSERT INTO users (id, handle, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(userId, body.handle, now, now),
     env.DB.prepare(`INSERT INTO devices
@@ -2204,13 +2215,17 @@ async function redeemDeviceLink(request, env, requestId, runtime) {
     return problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
   }
   const token = runtime.token();
+  const redeemedPublicKey = typeof body.public_key === "string" && body.public_key ? body.public_key : row.public_key;
+  if (redeemedPublicKey && !validDevicePublicKey(redeemedPublicKey) || env.REQUIRE_E2EE === "true" && !redeemedPublicKey) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   const expiresAt = now + 30 * 24 * 60 * 60 * 1e3;
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
-      SELECT ?, user_id, device_kind, device_name, public_key, ?, ?, ? FROM device_links AS link
+      SELECT ?, user_id, device_kind, device_name, ?, ?, ?, ? FROM device_links AS link
       WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
-        AND (SELECT COUNT(*) FROM devices WHERE user_id = link.user_id AND revoked_at IS NULL) < 10`).bind(deviceId, now, now, now, row.id, tokenHash, now),
+        AND (SELECT COUNT(*) FROM devices WHERE user_id = link.user_id AND revoked_at IS NULL) < 10`).bind(deviceId, redeemedPublicKey, now, now, now, row.id, tokenHash, now),
     env.DB.prepare(`UPDATE device_links SET consumed_at = ?, consumed_device_id = ?
       WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
         AND EXISTS (SELECT 1 FROM devices WHERE id = ?)`).bind(now, deviceId, row.id, tokenHash, now, deviceId),
@@ -2222,11 +2237,129 @@ async function redeemDeviceLink(request, env, requestId, runtime) {
     const count = await activeDeviceCount(env, row.user_id);
     return count >= 10 ? problem(409, "device_limit", "The device limit has been reached.", requestId) : problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
   }
-  const device = { id: deviceId, user_id: row.user_id, kind: row.device_kind, name_ciphertext: row.device_name, public_key: row.public_key, created_at: now, last_seen_at: now, revoked_at: null };
+  const device = { id: deviceId, user_id: row.user_id, kind: row.device_kind, name_ciphertext: row.device_name, public_key: redeemedPublicKey, created_at: now, last_seen_at: now, revoked_at: null };
   return json({ device: deviceOut(device, deviceId), access_token: token, token_type: "bearer", expires_at: iso(expiresAt) }, {
     status: 201,
     headers: { "x-request-id": requestId, pragma: "no-cache" }
   });
+}
+
+// infra/cloudflare/worker/src/e2ee.ts
+var ALGORITHM = "P256-HKDF-SHA256-A256GCM-v1";
+var MAX_ENVELOPE_BYTES = 16 * 1024;
+var encoder = new TextEncoder();
+function encodedEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const encoded = JSON.stringify(value);
+  return encoder.encode(encoded).byteLength <= MAX_ENVELOPE_BYTES ? encoded : null;
+}
+function keyVersion(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 2147483647 ? value : null;
+}
+function envelopeVersion(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return keyVersion(value.key_version);
+}
+function text(value) {
+  return typeof value === "string" ? value : new TextDecoder().decode(value);
+}
+async function e2eeStatus(env, auth, requestId) {
+  const current = await env.DB.prepare(`SELECT key_version, algorithm, created_at FROM account_key_versions
+    WHERE user_id = ? ORDER BY key_version DESC LIMIT 1`).bind(auth.user_id).first();
+  const devices = await env.DB.prepare(`SELECT d.id, d.public_key,
+      CASE WHEN e.device_id IS NULL THEN 0 ELSE 1 END AS has_envelope
+    FROM devices d LEFT JOIN device_key_envelopes e
+      ON e.device_id = d.id AND e.key_version = ?
+    WHERE d.user_id = ? AND d.revoked_at IS NULL ORDER BY d.created_at, d.id`).bind(current?.key_version ?? -1, auth.user_id).all();
+  return json({
+    initialized: Boolean(current),
+    current_key_version: current?.key_version ?? null,
+    algorithm: current?.algorithm ?? ALGORITHM,
+    created_at: iso(current?.created_at ?? null),
+    current_device_has_envelope: devices.results.some((device) => device.id === auth.device_id && Boolean(device.has_envelope)),
+    devices: devices.results.map((device) => ({
+      id: device.id,
+      public_key: typeof device.public_key === "string" ? device.public_key : new TextDecoder().decode(device.public_key),
+      has_envelope: Boolean(device.has_envelope)
+    }))
+  }, { headers: { "x-request-id": requestId } });
+}
+async function initializeAccountKey(request, env, auth, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  const version = keyVersion(body.key_version);
+  const recovery = encodedEnvelope(body.recovery_envelope);
+  const device = encodedEnvelope(body.device_envelope);
+  if (!version || !recovery || !device || envelopeVersion(body.recovery_envelope) !== version || envelopeVersion(body.device_envelope) !== version) {
+    return problem(422, "invalid_key_envelope", "Valid matching key_version, recovery_envelope, and device_envelope are required.", requestId);
+  }
+  const existing = await env.DB.prepare("SELECT key_version FROM account_key_versions WHERE user_id = ? ORDER BY key_version DESC LIMIT 1").bind(auth.user_id).first();
+  if (existing) return problem(409, "account_key_exists", "The account key has already been initialized.", requestId);
+  const now = runtime.now();
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO account_key_versions
+      (user_id, key_version, algorithm, recovery_envelope, created_by_device_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`).bind(auth.user_id, version, ALGORITHM, recovery, auth.device_id, now),
+    env.DB.prepare(`INSERT INTO device_key_envelopes
+      (user_id, device_id, key_version, algorithm, wrapped_key, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`).bind(auth.user_id, auth.device_id, version, ALGORITHM, device, now)
+  ]);
+  return json({ initialized: true, current_key_version: version, created_at: iso(now) }, {
+    status: 201,
+    headers: { "x-request-id": requestId }
+  });
+}
+async function currentDeviceEnvelope(env, auth, requestId) {
+  const row = await env.DB.prepare(`SELECT e.key_version, e.algorithm, e.wrapped_key, e.created_at
+    FROM device_key_envelopes e JOIN account_key_versions a
+      ON a.user_id = e.user_id AND a.key_version = e.key_version
+    WHERE e.user_id = ? AND e.device_id = ? ORDER BY e.key_version DESC LIMIT 1`).bind(auth.user_id, auth.device_id).first();
+  return row ? json({ key_version: row.key_version, algorithm: row.algorithm, envelope: JSON.parse(text(row.wrapped_key)), created_at: iso(row.created_at) }, {
+    headers: { "x-request-id": requestId }
+  }) : problem(404, "device_envelope_not_found", "No account-key envelope exists for this device.", requestId);
+}
+async function recoveryEnvelope(env, auth, requestId) {
+  const row = await env.DB.prepare(`SELECT key_version, algorithm, recovery_envelope, created_at FROM account_key_versions
+    WHERE user_id = ? ORDER BY key_version DESC LIMIT 1`).bind(auth.user_id).first();
+  return row ? json({ key_version: row.key_version, algorithm: row.algorithm, envelope: JSON.parse(text(row.recovery_envelope)), created_at: iso(row.created_at) }, {
+    headers: { "x-request-id": requestId }
+  }) : problem(404, "account_key_not_found", "The account key is not initialized.", requestId);
+}
+async function putDeviceEnvelope(request, env, auth, requestId, deviceId, runtime) {
+  const target = await env.DB.prepare("SELECT id FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(deviceId, auth.user_id).first();
+  if (!target) return problem(404, "active_device_not_found", "The active target device does not exist.", requestId);
+  const body = await bodyJson(request, requestId);
+  const version = keyVersion(body.key_version);
+  const envelope = encodedEnvelope(body.envelope);
+  if (!version || !envelope || envelopeVersion(body.envelope) !== version || body.envelope.recipient_device_id !== deviceId) {
+    return problem(422, "invalid_key_envelope", "A matching device envelope is required.", requestId);
+  }
+  const accountKey = await env.DB.prepare("SELECT key_version FROM account_key_versions WHERE user_id = ? AND key_version = ?").bind(auth.user_id, version).first();
+  if (!accountKey) return problem(409, "unknown_key_version", "The account key version does not exist.", requestId);
+  const existing = await env.DB.prepare("SELECT wrapped_key FROM device_key_envelopes WHERE device_id = ? AND key_version = ?").bind(deviceId, version).first();
+  if (existing) {
+    return text(existing.wrapped_key) === envelope ? json({ device_id: deviceId, key_version: version, created: false }, { headers: { "x-request-id": requestId } }) : problem(409, "device_envelope_exists", "A different envelope already exists for this device and key version.", requestId);
+  }
+  await env.DB.prepare(`INSERT INTO device_key_envelopes
+    (user_id, device_id, key_version, algorithm, wrapped_key, created_at) VALUES (?, ?, ?, ?, ?, ?)`).bind(auth.user_id, deviceId, version, ALGORITHM, envelope, runtime.now()).run();
+  return json({ device_id: deviceId, key_version: version, created: true }, {
+    status: 201,
+    headers: { "x-request-id": requestId }
+  });
+}
+async function putCurrentDeviceKey(request, env, auth, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  if (!validDevicePublicKey(publicKey)) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required.", requestId);
+  }
+  const row = await env.DB.prepare("SELECT public_key FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(auth.device_id, auth.user_id).first();
+  if (!row) return problem(404, "active_device_not_found", "The active current device does not exist.", requestId);
+  const current = typeof row.public_key === "string" ? row.public_key : new TextDecoder().decode(row.public_key);
+  if (current === publicKey) return json({ public_key: publicKey, updated: false }, { headers: { "x-request-id": requestId } });
+  const envelope = await env.DB.prepare("SELECT device_id FROM device_key_envelopes WHERE device_id = ? LIMIT 1").bind(auth.device_id).first();
+  if (envelope) return problem(409, "device_key_in_use", "The device key cannot change while account-key envelopes reference it.", requestId);
+  await env.DB.prepare("UPDATE devices SET public_key = ?, updated_at = ? WHERE id = ? AND user_id = ?").bind(publicKey, runtime.now(), auth.device_id, auth.user_id).run();
+  return json({ public_key: publicKey, updated: true }, { headers: { "x-request-id": requestId } });
 }
 
 // infra/cloudflare/worker/src/files.ts
@@ -2250,7 +2383,8 @@ function fileOut(row) {
     expires_at: iso(row.expires_at),
     deleted_at: iso(row.deleted_at),
     delete_reason: row.delete_reason,
-    alias_expires_at: iso(row.alias_expires_at)
+    alias_expires_at: iso(row.alias_expires_at),
+    e2ee: Boolean(row.e2ee)
   };
 }
 async function ownedFile(env, userId, fileId) {
@@ -2264,7 +2398,7 @@ function ttlPrefix(seconds) {
 }
 async function initFile(request, env, auth, requestId, runtime) {
   const body = await bodyJson(request, requestId);
-  const allowedFields = /* @__PURE__ */ new Set(["filename", "content_type", "size", "sha256", "expires_in"]);
+  const allowedFields = /* @__PURE__ */ new Set(["filename", "content_type", "size", "sha256", "expires_in", "encrypted"]);
   if (Object.keys(body).some((field) => !allowedFields.has(field))) {
     return problem(422, "unexpected_field", "The file initialization request contains an unsupported field.", requestId);
   }
@@ -2273,6 +2407,11 @@ async function initFile(request, env, auth, requestId, runtime) {
   const size = typeof body.size === "number" && Number.isSafeInteger(body.size) ? body.size : -1;
   const expectedHash = typeof body.sha256 === "string" ? body.sha256.toLowerCase() : null;
   const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 2592e3;
+  const encrypted = body.encrypted === true;
+  if (env.REQUIRE_E2EE === "true" && !encrypted) return problem(422, "e2ee_required", "Encrypted File upload is required.", requestId);
+  if (encrypted && (filename !== "encrypted.bin" || contentType !== "application/octet-stream")) {
+    return problem(422, "invalid_encrypted_file_metadata", "Encrypted File metadata must use opaque server values.", requestId);
+  }
   if (!filename || filename.length > 255) return problem(422, "invalid_filename", "filename must contain 1 to 255 characters.", requestId);
   if (!contentType || contentType.length > 200) return problem(422, "invalid_content_type", "content_type must contain 1 to 200 characters.", requestId);
   if (size < 0) return problem(422, "invalid_file_size", "size must be a non-negative integer.", requestId);
@@ -2292,11 +2431,11 @@ async function initFile(request, env, auth, requestId, runtime) {
   const r2Key = `ttl/${ttlPrefix(expiresIn)}/${auth.user_id}/${fileId}/${crypto.randomUUID()}.bin`;
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO files
-      (id, user_id, r2_key, original_name, content_type, expected_size, actual_size,
+      (id, user_id, r2_key, original_name, content_type, expected_size, actual_size, e2ee,
        expected_sha256, actual_sha256, state, created_at, completed_at, expires_at,
        deleted_at, delete_reason, alias_expires_at, upload_reservation_expires_at,
        r2_delete_attempts, r2_delete_retry_at, r2_delete_error_code)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`).bind(fileId, auth.user_id, r2Key, filename, contentType, size, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`).bind(fileId, auth.user_id, r2Key, filename, contentType, size, encrypted ? 1 : 0, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
     env.DB.prepare(`INSERT INTO file_tickets
       (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
       VALUES (?, ?, ?, 'upload', ?, ?, NULL)`).bind(tokenHash, auth.user_id, fileId, now, reservationExpiresAt)
@@ -7691,31 +7830,31 @@ function validateSeparator(separator) {
     throw new TypeError("Hex separators must be non-empty strings");
   }
 }
-function matchSeparator(text, index, separators) {
+function matchSeparator(text2, index, separators) {
   for (const separator of separators) {
-    if (text.startsWith(separator, index)) {
+    if (text2.startsWith(separator, index)) {
       return separator;
     }
   }
   return void 0;
 }
-function detectCase(text) {
-  const hasUpper = /[A-F]/.test(text);
-  const hasLower = /[a-f]/.test(text);
+function detectCase(text2) {
+  const hasUpper = /[A-F]/.test(text2);
+  const hasLower = /[a-f]/.test(text2);
   return hasUpper && !hasLower ? "upper" : "lower";
 }
-function detectLineSeparator(text) {
-  const match = /\r\n|\n/.exec(text);
+function detectLineSeparator(text2) {
+  const match = /\r\n|\n/.exec(text2);
   if (!match) {
     return void 0;
   }
   return match[0] === "\r\n" ? "\r\n" : "\n";
 }
-function compactForDetection(text) {
-  return text.replace(/[^0-9a-f]/gi, "");
+function compactForDetection(text2) {
+  return text2.replace(/[^0-9a-f]/gi, "");
 }
-function detectGroup(text) {
-  const segments = text.match(/[0-9A-Fa-f]+|[^0-9A-Fa-f]+/g) ?? [];
+function detectGroup(text2) {
+  const segments = text2.match(/[0-9A-Fa-f]+|[^0-9A-Fa-f]+/g) ?? [];
   if (segments.length < 3) {
     return void 0;
   }
@@ -7743,8 +7882,8 @@ function detectGroup(text) {
     separator
   };
 }
-function detectFormat(text) {
-  const trimmed = text.trim();
+function detectFormat(text2) {
+  const trimmed = text2.trim();
   const prefix = /^0x/i.test(trimmed) ? "0x" : "";
   const body = prefix ? trimmed.slice(2) : trimmed;
   const lineSeparator = detectLineSeparator(body);
@@ -7769,13 +7908,13 @@ function detectFormat(text) {
   }
   return format2;
 }
-function normalizeText(text, options) {
+function normalizeText(text2, options) {
   const allowPrefix = options.allowPrefix ?? true;
   const separators = [...resolveSeparators(options)].sort((left, right) => right.length - left.length);
   for (const separator of separators) {
     validateSeparator(separator);
   }
-  let working = text.trim();
+  let working = text2.trim();
   if (/^0x/i.test(working)) {
     if (!allowPrefix) {
       throw new TypeError("Hexadecimal text must not include a 0x prefix");
@@ -7826,15 +7965,15 @@ function groupPairs(pairs, group) {
   }
   return chunks.join(group.separator);
 }
-function normalize(text, options = {}) {
-  return normalizeText(text, options);
+function normalize(text2, options = {}) {
+  return normalizeText(text2, options);
 }
-function is(text, options = {}) {
-  if (typeof text !== "string") {
+function is(text2, options = {}) {
+  if (typeof text2 !== "string") {
     return false;
   }
   try {
-    normalize(text, options);
+    normalize(text2, options);
     return true;
   } catch {
     return false;
@@ -7844,8 +7983,8 @@ function encode2(data, options = {}) {
   const bytes = toUint8Array(data);
   const casing = options.case ?? "lower";
   const pairs = Array.from(bytes, (byte) => {
-    const text = byte.toString(16).padStart(2, "0");
-    return casing === "upper" ? text.toUpperCase() : text;
+    const text2 = byte.toString(16).padStart(2, "0");
+    return casing === "upper" ? text2.toUpperCase() : text2;
   });
   let body = "";
   if (options.line) {
@@ -7864,19 +8003,19 @@ function encode2(data, options = {}) {
   }
   return `${options.prefix ?? ""}${body}`;
 }
-function decode(text, options = {}) {
-  const normalized = normalize(text, options);
+function decode(text2, options = {}) {
+  const normalized = normalize(text2, options);
   const result = new Uint8Array(normalized.length / 2);
   for (let i = 0; i < normalized.length; i += 2) {
     result[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16);
   }
   return result;
 }
-function parse(text, options = {}) {
-  const normalized = normalize(text, options);
+function parse(text2, options = {}) {
+  const normalized = normalize(text2, options);
   return {
     bytes: decode(normalized),
-    format: detectFormat(text),
+    format: detectFormat(text2),
     normalized
   };
 }
@@ -7982,8 +8121,8 @@ var IpConverter = class {
     }
     return ip;
   }
-  static parseCIDR(text) {
-    const [addr, prefixStr] = text.split("/");
+  static parseCIDR(text2) {
+    const [addr, prefixStr] = text2.split("/");
     const prefix = parseInt(prefixStr, 10);
     if (this.isIPv4(addr)) {
       if (prefix < 0 || prefix > 32) {
@@ -8036,9 +8175,9 @@ var IpConverter = class {
     }
     return this.decodeIP(hex_exports.encode(buf));
   }
-  static fromString(text) {
-    if (text.includes("/")) {
-      const [addr, prefix] = this.parseCIDR(text);
+  static fromString(text2) {
+    if (text2.includes("/")) {
+      const [addr, prefix] = this.parseCIDR(text2);
       const maskBytes = new Uint8Array(addr.length);
       let bitsLeft = prefix;
       for (let i = 0; i < maskBytes.length; i++) {
@@ -8055,7 +8194,7 @@ var IpConverter = class {
       out.set(maskBytes, addr.length);
       return out.buffer;
     }
-    const bytes = this.isIPv4(text) ? this.parseIPv4(text) : this.parseIPv6(text);
+    const bytes = this.isIPv4(text2) ? this.parseIPv4(text2) : this.parseIPv6(text2);
     return new Uint8Array(bytes).buffer;
   }
 };
@@ -13534,24 +13673,24 @@ names.register("G", "2.5.4.42");
 names.register("I", "2.5.4.43");
 names.register("SN", "2.5.4.4");
 names.register("T", "2.5.4.12");
-function replaceUnknownCharacter(text, char) {
+function replaceUnknownCharacter(text2, char) {
   return `\\${import_pvtsutils.Convert.ToHex(import_pvtsutils.Convert.FromUtf8String(char)).toUpperCase()}`;
 }
 function escape2(data) {
   return data.replace(/([,+"\\<>;])/g, "\\$1").replace(/^([ #])/, "\\$1").replace(/([ ]$)/, "\\$1").replace(/([\r\n\t])/, replaceUnknownCharacter);
 }
 var Name3 = class _Name {
-  static isASCII(text) {
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
+  static isASCII(text2) {
+    for (let i = 0; i < text2.length; i++) {
+      const code = text2.charCodeAt(i);
       if (code > 255) {
         return false;
       }
     }
     return true;
   }
-  static isPrintableString(text) {
-    return /^[A-Za-z0-9 '()+,-./:=?]*$/g.test(text);
+  static isPrintableString(text2) {
+    return /^[A-Za-z0-9 '()+,-./:=?]*$/g.test(text2);
   }
   constructor(data, extraNames = {}) {
     this.extraNames = new NameIdentifier();
@@ -16766,8 +16905,8 @@ function toUTF8String2(array) {
   return decoder.decode(array);
 }
 function fromUTF8String2(utf8String) {
-  const encoder3 = new globalThis.TextEncoder();
-  return encoder3.encode(utf8String);
+  const encoder4 = new globalThis.TextEncoder();
+  return encoder4.encode(utf8String);
 }
 function fromASCIIString(value) {
   return Uint8Array.from(value.split("").map((x) => x.charCodeAt(0)));
@@ -19119,6 +19258,10 @@ async function registrationOptions(request, env, requestId, runtime) {
   if (!validHandle(body.handle) || typeof body.device_name !== "string" || !body.device_name.trim()) {
     return problem(422, "validation_error", "handle and device_name are required.", requestId);
   }
+  const devicePublicKey = typeof body.device_public_key === "string" ? body.device_public_key : "";
+  if (devicePublicKey && !validDevicePublicKey(devicePublicKey) || env.REQUIRE_E2EE === "true" && !devicePublicKey) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   if (await env.DB.prepare("SELECT id FROM users WHERE handle = ? AND deleted_at IS NULL").bind(body.handle).first()) {
     return problem(409, "handle_exists", "This handle already exists.", requestId);
   }
@@ -19135,8 +19278,18 @@ async function registrationOptions(request, env, requestId, runtime) {
   const challengeId = runtime.id("chl");
   const now = runtime.now();
   await env.DB.prepare(`INSERT INTO auth_challenges
-    (id, ceremony, challenge, pending_user_id, handle, device_name, device_kind, created_at, expires_at)
-    VALUES (?, 'registration', ?, ?, ?, ?, ?, ?, ?)`).bind(challengeId, options.challenge, pendingUserId, body.handle, body.device_name.trim(), deviceKind(body.device_kind), now, now + CHALLENGE_TTL_MS).run();
+    (id, ceremony, challenge, pending_user_id, handle, device_name, device_kind, device_public_key, created_at, expires_at)
+    VALUES (?, 'registration', ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+    challengeId,
+    options.challenge,
+    pendingUserId,
+    body.handle,
+    body.device_name.trim(),
+    deviceKind(body.device_kind),
+    devicePublicKey,
+    now,
+    now + CHALLENGE_TTL_MS
+  ).run();
   return json({ challenge_id: challengeId, public_key: options, expires_at: iso(now + CHALLENGE_TTL_MS) }, { headers: { "x-request-id": requestId } });
 }
 async function registrationVerify(request, env, requestId, runtime) {
@@ -19170,7 +19323,7 @@ async function registrationVerify(request, env, requestId, runtime) {
     env.DB.prepare("INSERT INTO users (id, handle, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(challenge.pending_user_id, challenge.handle, now, now),
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, challenge.pending_user_id, challenge.device_kind ?? "pwa", challenge.device_name, credential.id, now, now, now),
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(deviceId, challenge.pending_user_id, challenge.device_kind ?? "pwa", challenge.device_name, challenge.device_public_key ?? "", now, now, now),
     env.DB.prepare(`INSERT INTO passkey_credentials
       (credential_id, user_id, device_id, public_key, counter, transports_json, device_type, backed_up, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
@@ -19187,7 +19340,7 @@ async function registrationVerify(request, env, requestId, runtime) {
     )
   ]);
   const session = await issueBrowserSession(env, challenge.pending_user_id, deviceId, requestId, runtime);
-  const device = { id: deviceId, user_id: challenge.pending_user_id, kind: challenge.device_kind ?? "pwa", name_ciphertext: challenge.device_name, public_key: credential.id, created_at: now, last_seen_at: now, revoked_at: null };
+  const device = { id: deviceId, user_id: challenge.pending_user_id, kind: challenge.device_kind ?? "pwa", name_ciphertext: challenge.device_name, public_key: challenge.device_public_key ?? "", created_at: now, last_seen_at: now, revoked_at: null };
   return json({
     user: { id: challenge.pending_user_id, handle: challenge.handle, created_at: iso(now) },
     device: deviceOut(device, deviceId),
@@ -19339,7 +19492,7 @@ async function decodeCursor(value, auth, requestId) {
 }
 
 // infra/cloudflare/worker/src/web-push.ts
-var encoder = new TextEncoder();
+var encoder2 = new TextEncoder();
 var MAX_WEB_PUSH_PLAINTEXT_BYTES = 3993;
 var WEB_PUSH_RECORD_SIZE = 4096;
 var DELIVERY_ATTEMPT_LIMIT = 3;
@@ -19391,11 +19544,11 @@ async function encryptWebPushPayload(plaintext, receiverPublicKey, authenticatio
     applicationKeys.privateKey,
     256
   ));
-  const keyInfo = concatenate(encoder.encode("WebPush: info\0"), uaPublic, applicationPublic);
+  const keyInfo = concatenate(encoder2.encode("WebPush: info\0"), uaPublic, applicationPublic);
   const inputKeyMaterial = await hkdf(authSecret, sharedSecret, keyInfo, 32);
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const contentEncryptionKey = await hkdf(salt, inputKeyMaterial, encoder.encode("Content-Encoding: aes128gcm\0"), 16);
-  const nonce = await hkdf(salt, inputKeyMaterial, encoder.encode("Content-Encoding: nonce\0"), 12);
+  const contentEncryptionKey = await hkdf(salt, inputKeyMaterial, encoder2.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, inputKeyMaterial, encoder2.encode("Content-Encoding: nonce\0"), 12);
   const aesKey2 = await crypto.subtle.importKey("raw", ownedBuffer(contentEncryptionKey), "AES-GCM", false, ["encrypt"]);
   const record = concatenate(plaintext, new Uint8Array([2]));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
@@ -19425,8 +19578,8 @@ async function createVapidAuthorization(endpoint, publicKeyEncoded, privateKeyEn
   if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) throw new Error("VAPID_SUBJECT must be a mailto or HTTPS URI");
   const publicKey = validateWebPushKey("VAPID_PUBLIC_KEY", publicKeyEncoded, 65);
   const privateKey = validateWebPushKey("VAPID_PRIVATE_KEY", privateKeyEncoded, 32);
-  const header = base64UrlEncode(encoder.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
-  const claims = base64UrlEncode(encoder.encode(JSON.stringify({
+  const header = base64UrlEncode(encoder2.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claims = base64UrlEncode(encoder2.encode(JSON.stringify({
     aud: endpointUrl.origin,
     exp: Math.floor(now / 1e3) + 12 * 60 * 60,
     sub: subject
@@ -19442,13 +19595,13 @@ async function createVapidAuthorization(endpoint, publicKeyEncoded, privateKeyEn
   const signature = new Uint8Array(await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     signingKey,
-    encoder.encode(unsigned)
+    encoder2.encode(unsigned)
   ));
   return `vapid t=${unsigned}.${base64UrlEncode(signature)}, k=${publicKeyEncoded}`;
 }
 async function sendWebPush(request, env, now, fetcher = fetch) {
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) throw new Error("VAPID configuration is incomplete");
-  const body = await encryptWebPushPayload(encoder.encode(JSON.stringify(request.payload)), request.p256dh, request.auth);
+  const body = await encryptWebPushPayload(encoder2.encode(JSON.stringify(request.payload)), request.p256dh, request.auth);
   const authorization = await createVapidAuthorization(
     request.endpoint,
     env.VAPID_PUBLIC_KEY,
@@ -19495,6 +19648,7 @@ function deliveryPayload(row, subscription, origin, downloadUrl, deliveryToken, 
       file_id: row.file_id,
       size: Number(row.actual_size ?? row.expected_size),
       mime_type: "application/octet-stream",
+      encrypted: Boolean(row.e2ee),
       download_url: downloadUrl
     },
     file_delivery: {
@@ -19531,7 +19685,7 @@ function webPushDeliveryConfigured(env) {
 }
 async function deliverFilePush(env, pushId, origin, runtime, fetcher = fetch) {
   if (!webPushDeliveryConfigured(env)) return;
-  const deliveries = await env.DB.prepare(`SELECT d.*, f.actual_size, f.expected_size
+  const deliveries = await env.DB.prepare(`SELECT d.*, f.actual_size, f.expected_size, f.e2ee
     FROM file_deliveries d JOIN files f ON f.id = d.file_id
     WHERE d.push_id = ? AND d.state IN ('pending', 'failed_retryable') AND d.attempt_count < ?
     ORDER BY d.id`).bind(pushId, DELIVERY_ATTEMPT_LIMIT).all();
@@ -19574,7 +19728,7 @@ async function deliverFilePush(env, pushId, origin, runtime, fetcher = fetch) {
 }
 
 // infra/cloudflare/worker/src/pushes.ts
-var encoder2 = new TextEncoder();
+var encoder3 = new TextEncoder();
 var PUSH_SELECT = `SELECT
   p.*,
   f.state AS file_ref_state,
@@ -19603,9 +19757,11 @@ function pushOut(row, currentDeviceId) {
       alias_expires_at: iso(row.file_ref_alias_expires_at)
     } : null,
     payload_version: row.payload_version ?? 1,
-    payload: row.payload_json ? JSON.parse(row.payload_json) : {},
-    ciphertext: null,
-    nonce: null,
+    key_version: row.key_version ?? null,
+    encryption_salt: row.encryption_salt ?? null,
+    payload: row.payload_json ? JSON.parse(row.payload_json) : null,
+    ciphertext: row.payload_version >= 2 ? row.ciphertext : null,
+    nonce: row.payload_version >= 2 ? row.nonce : null,
     client_guid: row.client_guid,
     pinned: row.pinned_at != null,
     status: row.status ?? (row.deleted_at ? "deleted" : row.dismissed_at ? "dismissed" : "active"),
@@ -19618,8 +19774,8 @@ function pushOut(row, currentDeviceId) {
     is_for_current_device: targetKind === "all_devices" || targetKind === "all_other_devices" && row.source_device_id !== currentDeviceId || targetKind === "device" && row.target_device_id === currentDeviceId
   };
 }
-function payloadEquals(row, type, targetKind, targetDeviceId, fileId, payloadJson) {
-  return row.type === type && row.target_kind === targetKind && (row.target_device_id ?? null) === targetDeviceId && (row.file_id ?? null) === fileId && (row.payload_json ?? "{}") === payloadJson;
+function payloadEquals(row, type, targetKind, targetDeviceId, fileId, payloadVersion, keyVersion2, encryptionSalt, ciphertext, nonce, payloadJson) {
+  return row.type === type && row.target_kind === targetKind && (row.target_device_id ?? null) === targetDeviceId && (row.file_id ?? null) === fileId && Number(row.payload_version) === payloadVersion && (row.key_version ?? null) === keyVersion2 && (row.encryption_salt ?? null) === encryptionSalt && String(row.ciphertext ?? "") === ciphertext && String(row.nonce ?? "") === nonce && (row.payload_json ?? null) === payloadJson;
 }
 async function createPush(request, env, auth, requestId, runtime) {
   const body = await bodyJson(request, requestId);
@@ -19631,10 +19787,21 @@ async function createPush(request, env, auth, requestId, runtime) {
     return problem(422, "idempotency_key_mismatch", "Idempotency-Key and client_guid must match.", requestId);
   }
   const clientGuid = typeof body.client_guid === "string" ? body.client_guid : idempotencyKey ?? runtime.id("job");
+  const payloadVersion = body.payload_version === 2 ? 2 : 1;
+  if (env.REQUIRE_E2EE === "true" && payloadVersion !== 2) return problem(422, "e2ee_required", "Encrypted payload_version 2 is required.", requestId);
+  const encrypted = payloadVersion === 2;
   const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
-  const payloadJson = JSON.stringify(payload);
-  if (encoder2.encode(payloadJson).byteLength > 2e6) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
-  if (type === "link") {
+  const payloadJson = encrypted ? null : JSON.stringify(payload);
+  const keyVersion2 = encrypted && typeof body.key_version === "number" && Number.isSafeInteger(body.key_version) && body.key_version >= 1 ? body.key_version : null;
+  const encryptionSalt = encrypted && typeof body.encryption_salt === "string" ? body.encryption_salt : null;
+  const ciphertext = encrypted && typeof body.ciphertext === "string" ? body.ciphertext : "";
+  const nonce = encrypted && typeof body.nonce === "string" ? body.nonce : "";
+  if (encrypted && (!keyVersion2 || !encryptionSalt || !ciphertext || !nonce || ![encryptionSalt, ciphertext, nonce].every((value) => /^[A-Za-z0-9_-]+$/.test(value)))) {
+    return problem(422, "invalid_encrypted_payload", "key_version, encryption_salt, nonce, and ciphertext are required for payload_version 2.", requestId);
+  }
+  const encodedSize = encoder3.encode(encrypted ? `${encryptionSalt}.${nonce}.${ciphertext}` : payloadJson ?? "").byteLength;
+  if (encodedSize > 2e6) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
+  if (!encrypted && type === "link") {
     const url = payload.url;
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return problem(422, "invalid_link", "Link URLs must use http or https.", requestId);
   }
@@ -19651,7 +19818,7 @@ async function createPush(request, env, auth, requestId, runtime) {
   }
   const replay = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first();
   if (replay) {
-    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
+    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadVersion, keyVersion2, encryptionSalt, ciphertext, nonce, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
     await ensureFileDeliveries(env, replay, runtime);
@@ -19671,12 +19838,30 @@ async function createPush(request, env, auth, requestId, runtime) {
   const pushId = runtime.id("psh");
   try {
     await env.DB.prepare(`INSERT INTO pushes
-      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version,
+      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version, key_version, encryption_salt,
        ciphertext, nonce, payload_json, client_guid, created_at, modified_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`).bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, fileId, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`).bind(
+      pushId,
+      auth.user_id,
+      auth.device_id,
+      targetDeviceId,
+      targetKind,
+      type,
+      fileId,
+      payloadVersion,
+      keyVersion2,
+      encryptionSalt,
+      ciphertext,
+      nonce,
+      payloadJson,
+      clientGuid,
+      now,
+      now,
+      expiresAt
+    ).run();
   } catch {
     const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first();
-    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
+    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadVersion, keyVersion2, encryptionSalt, ciphertext, nonce, payloadJson)) throw new Error("push insert failed");
     await ensureFileDeliveries(env, raced, runtime);
     await deliverFilePush(env, raced.id, new URL(request.url).origin, runtime);
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });
@@ -19880,7 +20065,7 @@ function capabilities(env) {
       realtime: false,
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
-      e2ee: false,
+      e2ee: env.REQUIRE_E2EE === "true",
       direct_upload: false,
       device_registration: true,
       passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
@@ -19948,6 +20133,13 @@ function createRouter(runtime) {
       if (sessionMatch && request.method === "DELETE") return revokeBrowserSession(decodeURIComponent(sessionMatch[1]), env, auth, requestId, runtime);
       if (request.method === "GET" && path === "/v1/devices") return json(await listDevices(env, auth), { headers: { "x-request-id": requestId } });
       if (request.method === "GET" && path === "/v1/devices/me") return json(await currentDevice(env, auth), { headers: { "x-request-id": requestId } });
+      if (request.method === "GET" && path === "/v1/e2ee/status") return e2eeStatus(env, auth, requestId);
+      if (request.method === "PUT" && path === "/v1/e2ee/device-key") return putCurrentDeviceKey(request, env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/e2ee/account-key") return initializeAccountKey(request, env, auth, requestId, runtime);
+      if (request.method === "GET" && path === "/v1/e2ee/device-envelope") return currentDeviceEnvelope(env, auth, requestId);
+      if (request.method === "GET" && path === "/v1/e2ee/recovery-envelope") return recoveryEnvelope(env, auth, requestId);
+      const deviceEnvelopeMatch = path.match(/^\/v1\/e2ee\/device-envelopes\/([^/]+)$/);
+      if (deviceEnvelopeMatch && request.method === "PUT") return putDeviceEnvelope(request, env, auth, requestId, decodeURIComponent(deviceEnvelopeMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/device-links") return createDeviceLink(request, env, auth, requestId, runtime);
       const deviceLinkMatch = path.match(/^\/v1\/device-links\/([^/]+)$/);
       if (deviceLinkMatch && request.method === "GET") return deviceLinkStatus(env, auth, requestId, decodeURIComponent(deviceLinkMatch[1]), runtime);

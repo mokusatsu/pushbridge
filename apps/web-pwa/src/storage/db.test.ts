@@ -29,6 +29,14 @@ const push: PushRecord = {
 };
 
 describe('AppDatabase', () => {
+  it('persists the account key in the namespaced IndexedDB key store', async () => {
+    const db = createDb();
+    const key = new Uint8Array(32).fill(7);
+    await db.putAccountKey({ key_version: 2, key_bytes: key, recovery_key_bytes: new Uint8Array(32).fill(9), created_at: '2026-01-01T00:00:00Z' });
+    const stored = await db.getAccountKey();
+    expect(stored?.key_version).toBe(2);
+    expect(Array.from(stored?.key_bytes ?? [])).toEqual(Array.from(key));
+  });
   it('applies change events atomically and advances the cursor', async () => {
     const db = createDb();
     const changes: ChangeEvent[] = [{

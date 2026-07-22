@@ -432,6 +432,12 @@ variable "turnstile_mode" {
   }
 }
 
+variable "require_e2ee" {
+  description = "Require version 2 encrypted Push payloads and encrypted File uploads. Enable only after the Phase 7 client passes E2E."
+  type        = bool
+  default     = false
+}
+
 variable "worker_plain_text_vars" {
   description = "Additional non-sensitive Worker text bindings. Reserved built-in names take precedence."
   type        = map(string)

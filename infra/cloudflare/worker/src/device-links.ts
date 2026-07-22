@@ -1,5 +1,6 @@
 import { sha256Hex } from "./crypto";
 import { deviceOut } from "./devices";
+import { validDevicePublicKey } from "./device-key";
 import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, DeviceRow, Env, Runtime } from "./types";
@@ -79,14 +80,18 @@ export async function redeemDeviceLink(request: Request, env: Env, requestId: st
     return problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
   }
   const token = runtime.token();
+  const redeemedPublicKey = typeof body.public_key === "string" && body.public_key ? body.public_key : row.public_key;
+  if ((redeemedPublicKey && !validDevicePublicKey(redeemedPublicKey)) || (env.REQUIRE_E2EE === "true" && !redeemedPublicKey)) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
-      SELECT ?, user_id, device_kind, device_name, public_key, ?, ?, ? FROM device_links AS link
+      SELECT ?, user_id, device_kind, device_name, ?, ?, ?, ? FROM device_links AS link
       WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
         AND (SELECT COUNT(*) FROM devices WHERE user_id = link.user_id AND revoked_at IS NULL) < 10`)
-      .bind(deviceId, now, now, now, row.id, tokenHash, now),
+      .bind(deviceId, redeemedPublicKey, now, now, now, row.id, tokenHash, now),
     env.DB.prepare(`UPDATE device_links SET consumed_at = ?, consumed_device_id = ?
       WHERE id = ? AND token_hash = ? AND consumed_at IS NULL AND expires_at > ?
         AND EXISTS (SELECT 1 FROM devices WHERE id = ?)`)
@@ -102,7 +107,7 @@ export async function redeemDeviceLink(request: Request, env: Env, requestId: st
       ? problem(409, "device_limit", "The device limit has been reached.", requestId)
       : problem(410, "device_link_invalid", "The device link is invalid, expired, or already used.", requestId);
   }
-  const device: DeviceRow = { id: deviceId, user_id: row.user_id, kind: row.device_kind, name_ciphertext: row.device_name, public_key: row.public_key, created_at: now, last_seen_at: now, revoked_at: null };
+  const device: DeviceRow = { id: deviceId, user_id: row.user_id, kind: row.device_kind, name_ciphertext: row.device_name, public_key: redeemedPublicKey, created_at: now, last_seen_at: now, revoked_at: null };
   return json({ device: deviceOut(device, deviceId), access_token: token, token_type: "bearer", expires_at: iso(expiresAt) }, {
     status: 201,
     headers: { "x-request-id": requestId, pragma: "no-cache" },

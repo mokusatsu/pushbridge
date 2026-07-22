@@ -31,7 +31,7 @@ export async function getPasskeyConfig(api: ApiClient): Promise<PasskeyPublicCon
   return api.request('/auth/config') as Promise<PasskeyPublicConfig>;
 }
 
-export async function registerPasskey(api: ApiClient, input: { handle: string; device_name: string; turnstile_token?: string }): Promise<PasskeySession> {
+export async function registerPasskey(api: ApiClient, input: { handle: string; device_name: string; device_public_key: string; turnstile_token?: string }): Promise<PasskeySession> {
   const challenge = await api.request('/auth/passkeys/registration/options', {
     method: 'POST',
     body: JSON.stringify({ ...input, device_kind: 'pwa' }),

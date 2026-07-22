@@ -7,6 +7,14 @@ interface MetaRecord {
   value: unknown;
 }
 
+export interface LocalAccountKey {
+  id: 'account-key';
+  key_version: number;
+  key_bytes: Uint8Array;
+  recovery_key_bytes?: Uint8Array;
+  created_at: string;
+}
+
 interface PushbridgeDbSchema extends DBSchema {
   meta: {
     key: string;
@@ -43,6 +51,10 @@ interface PushbridgeDbSchema extends DBSchema {
       'by-push-id': string;
     };
   };
+  e2eeKeys: {
+    key: string;
+    value: LocalAccountKey;
+  };
 }
 
 function databaseName(namespace: string): string {
@@ -56,7 +68,7 @@ export class AppDatabase {
 
   constructor(namespace: string) {
     this.name = databaseName(namespace);
-    this.dbPromise = openDB<PushbridgeDbSchema>(this.name, 2, {
+    this.dbPromise = openDB<PushbridgeDbSchema>(this.name, 3, {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) {
           const meta = db.createObjectStore('meta', { keyPath: 'key' });
@@ -78,8 +90,19 @@ export class AppDatabase {
           cachedFiles.createIndex('by-last-accessed-at', 'last_accessed_at');
           cachedFiles.createIndex('by-push-id', 'push_id');
         }
+        if (oldVersion < 3) db.createObjectStore('e2eeKeys', { keyPath: 'id' });
       },
     });
+  }
+
+  async getAccountKey(): Promise<LocalAccountKey | undefined> {
+    const db = await this.dbPromise;
+    return db.get('e2eeKeys', 'account-key');
+  }
+
+  async putAccountKey(key: Omit<LocalAccountKey, 'id'>): Promise<void> {
+    const db = await this.dbPromise;
+    await db.put('e2eeKeys', { id: 'account-key', ...key });
   }
 
   async getCursor(): Promise<string> {
@@ -162,7 +185,7 @@ export class AppDatabase {
             title: incoming.title ?? existing.title,
             body: incoming.body ?? existing.body,
             url: incoming.url ?? existing.url,
-            file: cached && incoming.file ? {
+            file: cached && incoming.file && !incoming.file.e2ee ? {
               ...incoming.file,
               name: cached.name,
               mime_type: cached.mime_type,
@@ -180,7 +203,7 @@ export class AppDatabase {
               : existing.local_archived_at,
           } : {
             ...incoming,
-            file: cached && incoming.file ? {
+            file: cached && incoming.file && !incoming.file.e2ee ? {
               ...incoming.file,
               name: cached.name,
               mime_type: cached.mime_type,

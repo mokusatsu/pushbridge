@@ -6,6 +6,8 @@ import type {
   DeviceCredential,
   DeviceLinkGrant,
   DownloadTicket,
+  E2eeEnvelopeResponse,
+  E2eeStatus,
   FileAttachment,
   FileDelivery,
   FileInitRequest,
@@ -62,6 +64,7 @@ export const endpoints = {
   files: '/files',
   realtimeTicket: '/realtime-ticket',
   subscriptions: '/web-push-subscriptions',
+  e2ee: '/e2ee',
 } as const;
 
 const relayMockCapabilities: SystemCapabilities = {
@@ -111,10 +114,25 @@ function wireTarget(input: SendPushRequest['target']): Record<string, unknown> {
 export function buildRelayMockPushBody(input: SendPushRequest): Record<string, unknown> {
   const common = compactObject({
     target: wireTarget(input.target),
-    payload_version: 1,
+    payload_version: input.payload_version ?? 1,
     client_guid: input.client_guid,
     expires_in: input.expires_in,
   });
+
+  if (input.payload_version === 2) {
+    if (!input.key_version || !input.encryption_salt || !input.ciphertext || !input.nonce) {
+      throw new ApiError('暗号化Push envelopeが不足しています。', { status: 422, code: 'client_invalid_envelope' });
+    }
+    return {
+      ...common,
+      type: input.type,
+      ...(input.file_id ? { file_id: input.file_id } : {}),
+      key_version: input.key_version,
+      encryption_salt: input.encryption_salt,
+      ciphertext: input.ciphertext,
+      nonce: input.nonce,
+    };
+  }
 
   if (input.type === 'note') {
     const payload = compactObject({ title: input.title, body: input.body });
@@ -243,7 +261,7 @@ export class LocalApi {
     );
 
     await Promise.all(changes.items.map(async (change) => {
-      if (change.type !== 'push.upsert' || !change.push?.file_id) return;
+      if (change.type !== 'push.upsert' || !change.push?.file_id || change.push.payload_version === 2) return;
       if (change.push.file) {
         this.fileCache.set(change.push.file.id, change.push.file);
         return;
@@ -308,6 +326,7 @@ export class LocalApi {
         size: input.size,
         sha256: input.sha256 ?? null,
         expires_in: input.expires_in,
+        encrypted: input.encrypted ?? false,
       }),
     }));
     if (result.file) this.fileCache.set(result.file.id, result.file);
@@ -325,11 +344,33 @@ export class LocalApi {
     }));
   }
 
-  async redeemDeviceLink(linkToken: string): Promise<DeviceCredential> {
+  async redeemDeviceLink(linkToken: string, publicKey?: string): Promise<DeviceCredential> {
     return linkDeviceResponseSchema.parse(await this.client.request(`${endpoints.deviceLinks}/redeem`, {
       method: 'POST',
-      body: JSON.stringify({ link_token: linkToken }),
+      body: JSON.stringify({ link_token: linkToken, public_key: publicKey ?? null }),
     }));
+  }
+
+  async putCurrentDeviceKey(publicKey: string): Promise<void> {
+    await this.client.request(`${endpoints.e2ee}/device-key`, { method: 'PUT', body: JSON.stringify({ public_key: publicKey }) });
+  }
+
+  async getE2eeStatus(): Promise<E2eeStatus> {
+    return this.client.request(`${endpoints.e2ee}/status`) as Promise<E2eeStatus>;
+  }
+
+  async initializeAccountKey(input: { key_version: number; recovery_envelope: unknown; device_envelope: unknown }): Promise<void> {
+    await this.client.request(`${endpoints.e2ee}/account-key`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async getCurrentDeviceEnvelope<T = Record<string, unknown>>(): Promise<E2eeEnvelopeResponse<T>> {
+    return this.client.request(`${endpoints.e2ee}/device-envelope`) as Promise<E2eeEnvelopeResponse<T>>;
+  }
+
+  async putDeviceEnvelope(deviceId: string, keyVersion: number, envelope: unknown): Promise<void> {
+    await this.client.request(`${endpoints.e2ee}/device-envelopes/${encodeURIComponent(deviceId)}`, {
+      method: 'PUT', body: JSON.stringify({ key_version: keyVersion, envelope }),
+    });
   }
 
   async rotateBrowserSession(): Promise<{ csrf_token: string; expires_at: string }> {

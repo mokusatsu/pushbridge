@@ -635,6 +635,17 @@
                   "link_token": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "public_key": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^p256\\.[A-Za-z0-9_-]{87}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -2333,6 +2344,349 @@
           }
         }
       }
+    },
+    "/v1/e2ee/status": {
+      "get": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Get E2EE status",
+        "operationId": "get_e2ee_status",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/E2eeStatusOut"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/e2ee/device-key": {
+      "put": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Register current device encryption key",
+        "operationId": "put_e2ee_device_key",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "public_key"
+                ],
+                "properties": {
+                  "public_key": {
+                    "type": "string",
+                    "pattern": "^p256\\.[A-Za-z0-9_-]{87}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/e2ee/account-key": {
+      "post": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Initialize account key envelopes",
+        "operationId": "initialize_e2ee_account_key",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key_version",
+                  "recovery_envelope",
+                  "device_envelope"
+                ],
+                "properties": {
+                  "key_version": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "recovery_envelope": {
+                    "$ref": "#/components/schemas/E2eeRecoveryEnvelope"
+                  },
+                  "device_envelope": {
+                    "$ref": "#/components/schemas/E2eeDeviceEnvelope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/e2ee/device-envelope": {
+      "get": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Get current device account-key envelope",
+        "operationId": "get_e2ee_device_envelope",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/e2ee/recovery-envelope": {
+      "get": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Get recovery envelope",
+        "operationId": "get_e2ee_recovery_envelope",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
+    },
+    "/v1/e2ee/device-envelopes/{device_id}": {
+      "put": {
+        "tags": [
+          "e2ee"
+        ],
+        "summary": "Provision an active device envelope",
+        "operationId": "put_e2ee_device_envelope",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "key_version",
+                  "envelope"
+                ],
+                "properties": {
+                  "key_version": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "envelope": {
+                    "$ref": "#/components/schemas/E2eeDeviceEnvelope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableContent"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2398,6 +2752,10 @@
               "null"
             ],
             "maxLength": 2048
+          },
+          "device_public_key": {
+            "type": "string",
+            "pattern": "^p256\\.[A-Za-z0-9_-]{87}$"
           }
         }
       },
@@ -3059,9 +3417,8 @@
           },
           "payload_version": {
             "type": "integer",
-            "const": 1,
-            "title": "Payload Version",
-            "default": 1
+            "const": 2,
+            "default": 2
           },
           "client_guid": {
             "anyOf": [
@@ -3115,6 +3472,15 @@
             "maxLength": 1024,
             "minLength": 1,
             "title": "Nonce"
+          },
+          "key_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "encryption_salt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
           }
         },
         "additionalProperties": false,
@@ -3123,7 +3489,10 @@
           "type",
           "file_id",
           "ciphertext",
-          "nonce"
+          "nonce",
+          "payload_version",
+          "key_version",
+          "encryption_salt"
         ],
         "title": "FileEncryptedPushCreate"
       },
@@ -3174,6 +3543,10 @@
               }
             ],
             "title": "Expires In"
+          },
+          "encrypted": {
+            "type": "boolean",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -3348,6 +3721,10 @@
               }
             ],
             "title": "Alias Expires At"
+          },
+          "e2ee": {
+            "type": "boolean",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -3364,7 +3741,8 @@
           "created_at",
           "completed_at",
           "expires_at",
-          "deleted_at"
+          "deleted_at",
+          "e2ee"
         ],
         "title": "FileOut"
       },
@@ -3750,9 +4128,8 @@
           },
           "payload_version": {
             "type": "integer",
-            "const": 1,
-            "title": "Payload Version",
-            "default": 1
+            "const": 2,
+            "default": 2
           },
           "client_guid": {
             "anyOf": [
@@ -3804,6 +4181,15 @@
             "maxLength": 1024,
             "minLength": 1,
             "title": "Nonce"
+          },
+          "key_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "encryption_salt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
           }
         },
         "additionalProperties": false,
@@ -3811,7 +4197,10 @@
         "required": [
           "type",
           "ciphertext",
-          "nonce"
+          "nonce",
+          "payload_version",
+          "key_version",
+          "encryption_salt"
         ],
         "title": "LinkEncryptedPushCreate"
       },
@@ -3914,9 +4303,8 @@
           },
           "payload_version": {
             "type": "integer",
-            "const": 1,
-            "title": "Payload Version",
-            "default": 1
+            "const": 2,
+            "default": 2
           },
           "client_guid": {
             "anyOf": [
@@ -3968,6 +4356,15 @@
             "maxLength": 1024,
             "minLength": 1,
             "title": "Nonce"
+          },
+          "key_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "encryption_salt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
           }
         },
         "additionalProperties": false,
@@ -3975,7 +4372,10 @@
         "required": [
           "type",
           "ciphertext",
-          "nonce"
+          "nonce",
+          "payload_version",
+          "key_version",
+          "encryption_salt"
         ],
         "title": "NoteEncryptedPushCreate"
       },
@@ -4301,6 +4701,27 @@
           "is_for_current_device": {
             "type": "boolean",
             "title": "Is For Current Device"
+          },
+          "key_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "encryption_salt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -4326,7 +4747,9 @@
           "expired_at",
           "dismissed_at",
           "deleted_at",
-          "is_for_current_device"
+          "is_for_current_device",
+          "key_version",
+          "encryption_salt"
         ],
         "title": "PushOut"
       },
@@ -4747,6 +5170,154 @@
         "properties": {
           "detail": {
             "$ref": "#/components/schemas/ApiErrorDetail"
+          }
+        }
+      },
+      "E2eeContentEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "v",
+          "alg",
+          "key_version",
+          "salt",
+          "nonce",
+          "ciphertext"
+        ],
+        "properties": {
+          "v": {
+            "type": "integer",
+            "const": 1
+          },
+          "alg": {
+            "type": "string",
+            "const": "A256GCM-HKDF-SHA256"
+          },
+          "key_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "salt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "nonce": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "ciphertext": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          }
+        }
+      },
+      "E2eeDeviceEnvelope": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/E2eeContentEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "recipient_device_id",
+              "ephemeral_public_key"
+            ],
+            "properties": {
+              "recipient_device_id": {
+                "type": "string"
+              },
+              "ephemeral_public_key": {
+                "type": "string",
+                "pattern": "^p256\\.[A-Za-z0-9_-]{87}$"
+              }
+            }
+          }
+        ]
+      },
+      "E2eeRecoveryEnvelope": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/E2eeContentEnvelope"
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "recovery"
+              }
+            }
+          }
+        ]
+      },
+      "E2eeStatusOut": {
+        "type": "object",
+        "required": [
+          "initialized",
+          "current_key_version",
+          "algorithm",
+          "current_device_has_envelope",
+          "devices"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          },
+          "current_key_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "algorithm": {
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_device_has_envelope": {
+            "type": "boolean"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "public_key",
+                "has_envelope"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "public_key": {
+                  "type": "string"
+                },
+                "has_envelope": {
+                  "type": "boolean"
+                }
+              }
+            }
           }
         }
       }

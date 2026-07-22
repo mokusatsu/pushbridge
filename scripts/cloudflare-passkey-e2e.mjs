@@ -34,7 +34,7 @@ run(npm, [...npmPrefix, "run", "worker:build"]);
 run(npm, [...npmPrefix, "run", "--prefix", "apps/web-pwa", "build"]);
 run(npx, [...npxPrefix, "--yes", "wrangler@4", "d1", "migrations", "apply", "DB", "--local", "--config", config, "--persist-to", persistence]);
 
-const child = spawn(npx, [...npxPrefix, "--yes", "wrangler@4", "dev", "--local", "--config", config, "--persist-to", persistence, "--ip", "127.0.0.1", "--port", "8787"], {
+const child = spawn(npx, [...npxPrefix, "--yes", "wrangler@4", "dev", "--local", "--config", config, "--persist-to", persistence, "--ip", "127.0.0.1", "--port", "8787", "--var", "REQUIRE_E2EE:true"], {
   env: process.env,
   stdio: ["ignore", "pipe", "pipe"],
   shell: false,

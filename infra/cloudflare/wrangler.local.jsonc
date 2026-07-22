@@ -57,6 +57,7 @@
     "AUTH_RATE_LIMIT": "20",
     "ACCOUNT_AUTH_RATE_LIMIT": "20",
     "DEVICE_MUTATION_RATE_LIMIT": "300",
+    "REQUIRE_E2EE": "false",
     "R2_BUCKET_NAME": "pushbridge-local-files",
     "FILE_RETENTION_POLICY": "{\"ttl/1d/\":172800,\"ttl/7d/\":691200,\"ttl/30d/\":2678400}"
   }

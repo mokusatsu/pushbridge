@@ -178,6 +178,8 @@ test('service worker exposes and applies a real byte-level update @desktop', asy
   const serviceWorkerPath = fileURLToPath(new URL('../../../infra/cloudflare/app/dist/sw.js', import.meta.url));
   const original = await readFile(serviceWorkerPath, 'utf8');
   try {
+    expect(original).toContain('if (item.encrypted) blob = await decryptFileBlob(db, item.file_id, blob)');
+    expect(original.indexOf('decryptFileBlob(db, item.file_id, blob)')).toBeLessThan(original.indexOf("transaction.objectStore('cachedFiles').put"));
     await page.goto(`${origin}/#/timeline`);
     await expect.poll(async () => {
       try {

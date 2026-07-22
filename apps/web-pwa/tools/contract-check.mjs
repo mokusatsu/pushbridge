@@ -58,6 +58,12 @@ for (const path of [
   '/v1/device-links',
   '/v1/device-links/redeem',
   '/v1/device-links/{link_id}',
+  '/v1/e2ee/status',
+  '/v1/e2ee/device-key',
+  '/v1/e2ee/account-key',
+  '/v1/e2ee/device-envelope',
+  '/v1/e2ee/recovery-envelope',
+  '/v1/e2ee/device-envelopes/{device_id}',
   '/v1/devices',
   '/v1/devices/me',
   '/v1/devices/link',
@@ -91,6 +97,13 @@ for (const name of [
 const pushOut = schema('PushOut');
 assert(pushOut.properties?.file_ref, 'PushOut.file_ref is missing');
 assert(pushOut.required?.includes('file_ref'), 'PushOut.file_ref must be required by the 0.1.1 response contract');
+for (const name of ['key_version', 'encryption_salt', 'ciphertext', 'nonce']) assert(pushOut.properties?.[name], `PushOut.${name} is missing`);
+for (const name of ['NoteEncryptedPushCreate', 'LinkEncryptedPushCreate', 'FileEncryptedPushCreate']) {
+  const encrypted = schema(name);
+  assert(encrypted.properties?.payload_version?.const === 2, `${name}.payload_version must be 2`);
+  assert(encrypted.required?.includes('key_version') && encrypted.required?.includes('encryption_salt'), `${name} must require the Phase 7 key fields`);
+}
+for (const name of ['E2eeContentEnvelope', 'E2eeDeviceEnvelope', 'E2eeRecoveryEnvelope', 'E2eeStatusOut']) schema(name);
 
 const capabilities = schema('CapabilityLimits');
 for (const name of [
@@ -110,6 +123,7 @@ for (const name of [
   'browser_cookie_sessions',
   'session_rotation',
   'one_time_device_link',
+  'e2ee',
 ]) {
   assert(capabilityFeatures.properties?.[name], `CapabilityFeatures.${name} is missing`);
 }
@@ -170,4 +184,4 @@ for (const responseName of ['BadRequest', 'Unauthorized', 'Forbidden', 'NotFound
 assert(at('/components/headers/XRequestID/schema/pattern') === '^req_[A-Za-z0-9_-]+$', 'X-Request-ID pattern changed unexpectedly');
 
 console.log(`✓ RelayMock OpenAPI contract ${document.info.version}`);
-console.log('✓ capabilities, strict PushCreate, file_ref, binary tickets, errors and Request IDs');
+console.log('✓ capabilities, E2EE envelopes, strict PushCreate, file_ref, binary tickets, errors and Request IDs');

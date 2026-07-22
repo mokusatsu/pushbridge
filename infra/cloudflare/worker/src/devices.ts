@@ -1,4 +1,5 @@
 import { bodyJson, json, problem } from "./response";
+import { validDevicePublicKey } from "./device-key";
 import { iso } from "./runtime";
 import { sha256Hex } from "./crypto";
 import type { AuthContext, DeviceRow, Env, Runtime } from "./types";
@@ -40,6 +41,9 @@ export async function linkDevice(request: Request, env: Env, auth: AuthContext, 
   const kind = body.kind === "browser_extension" ? "extension" : typeof body.kind === "string" ? body.kind : "web";
   if (!["web", "pwa", "extension"].includes(kind)) return problem(422, "validation_error", "Invalid device kind.", requestId);
   const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  if ((publicKey && !validDevicePublicKey(publicKey)) || (env.REQUIRE_E2EE === "true" && !publicKey)) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)

@@ -311,6 +311,27 @@ describe('RelayMock LocalApi adapter', () => {
     expect(ticket.download.url).toBe('/mock-storage/downloads/ticket');
   });
 
+  it('sends version 2 encrypted fields without plaintext payload metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({
+        target: { kind: 'all_other_devices' }, client_guid: 'job_e2ee', type: 'note', payload_version: 2,
+        key_version: 3, encryption_salt: 'salt', ciphertext: 'ciphertext', nonce: 'nonce',
+      });
+      expect(JSON.stringify(body)).not.toContain('secret title');
+      return jsonResponse({
+        ...pushWire, client_guid: 'job_e2ee', payload_version: 2, payload: null,
+        key_version: 3, encryption_salt: 'salt', ciphertext: 'ciphertext', nonce: 'nonce',
+      }, 201);
+    }));
+    const api = new LocalApi(new ApiClient(settings));
+    const result = await api.createPush({
+      type: 'note', target: { kind: 'all_other_devices' }, title: 'secret title', client_guid: 'job_e2ee',
+      payload_version: 2, key_version: 3, encryption_salt: 'salt', ciphertext: 'ciphertext', nonce: 'nonce',
+    }, 'job_e2ee');
+    expect(result).toMatchObject({ payload_version: 2, key_version: 3, title: null, ciphertext: 'ciphertext' });
+  });
+
   it('parses per-device file delivery states from the contract endpoint', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse([{
       id: 'fdl_1',

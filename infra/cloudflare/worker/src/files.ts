@@ -31,6 +31,7 @@ function fileOut(row: FileRow): Record<string, unknown> {
     deleted_at: iso(row.deleted_at),
     delete_reason: row.delete_reason,
     alias_expires_at: iso(row.alias_expires_at),
+    e2ee: Boolean(row.e2ee),
   };
 }
 
@@ -49,7 +50,7 @@ function ttlPrefix(seconds: number): string {
 
 async function initFile(request: Request, env: Env, auth: AuthContext, requestId: string, runtime: Runtime): Promise<Response> {
   const body = await bodyJson(request, requestId);
-  const allowedFields = new Set(["filename", "content_type", "size", "sha256", "expires_in"]);
+  const allowedFields = new Set(["filename", "content_type", "size", "sha256", "expires_in", "encrypted"]);
   if (Object.keys(body).some((field) => !allowedFields.has(field))) {
     return problem(422, "unexpected_field", "The file initialization request contains an unsupported field.", requestId);
   }
@@ -58,6 +59,11 @@ async function initFile(request: Request, env: Env, auth: AuthContext, requestId
   const size = typeof body.size === "number" && Number.isSafeInteger(body.size) ? body.size : -1;
   const expectedHash = typeof body.sha256 === "string" ? body.sha256.toLowerCase() : null;
   const expiresIn = typeof body.expires_in === "number" ? body.expires_in : 2_592_000;
+  const encrypted = body.encrypted === true;
+  if (env.REQUIRE_E2EE === "true" && !encrypted) return problem(422, "e2ee_required", "Encrypted File upload is required.", requestId);
+  if (encrypted && (filename !== "encrypted.bin" || contentType !== "application/octet-stream")) {
+    return problem(422, "invalid_encrypted_file_metadata", "Encrypted File metadata must use opaque server values.", requestId);
+  }
   if (!filename || filename.length > 255) return problem(422, "invalid_filename", "filename must contain 1 to 255 characters.", requestId);
   if (!contentType || contentType.length > 200) return problem(422, "invalid_content_type", "content_type must contain 1 to 200 characters.", requestId);
   if (size < 0) return problem(422, "invalid_file_size", "size must be a non-negative integer.", requestId);
@@ -79,12 +85,12 @@ async function initFile(request: Request, env: Env, auth: AuthContext, requestId
   const r2Key = `ttl/${ttlPrefix(expiresIn)}/${auth.user_id}/${fileId}/${crypto.randomUUID()}.bin`;
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO files
-      (id, user_id, r2_key, original_name, content_type, expected_size, actual_size,
+      (id, user_id, r2_key, original_name, content_type, expected_size, actual_size, e2ee,
        expected_sha256, actual_sha256, state, created_at, completed_at, expires_at,
        deleted_at, delete_reason, alias_expires_at, upload_reservation_expires_at,
        r2_delete_attempts, r2_delete_retry_at, r2_delete_error_code)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`)
-      .bind(fileId, auth.user_id, r2Key, filename, contentType, size, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`)
+      .bind(fileId, auth.user_id, r2Key, filename, contentType, size, encrypted ? 1 : 0, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
     env.DB.prepare(`INSERT INTO file_tickets
       (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
       VALUES (?, ?, ?, 'upload', ?, ?, NULL)`)

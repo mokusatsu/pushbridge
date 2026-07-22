@@ -35,9 +35,11 @@ export function pushOut(row: PushRow, currentDeviceId: string): Record<string, u
       alias_expires_at: iso(row.file_ref_alias_expires_at),
     } : null,
     payload_version: row.payload_version ?? 1,
-    payload: row.payload_json ? JSON.parse(row.payload_json) : {},
-    ciphertext: null,
-    nonce: null,
+    key_version: row.key_version ?? null,
+    encryption_salt: row.encryption_salt ?? null,
+    payload: row.payload_json ? JSON.parse(row.payload_json) : null,
+    ciphertext: row.payload_version >= 2 ? row.ciphertext : null,
+    nonce: row.payload_version >= 2 ? row.nonce : null,
     client_guid: row.client_guid,
     pinned: row.pinned_at != null,
     status: row.status ?? (row.deleted_at ? "deleted" : row.dismissed_at ? "dismissed" : "active"),
@@ -53,12 +55,18 @@ export function pushOut(row: PushRow, currentDeviceId: string): Record<string, u
   };
 }
 
-function payloadEquals(row: PushRow, type: string, targetKind: string, targetDeviceId: string | null, fileId: string | null, payloadJson: string): boolean {
+function payloadEquals(row: PushRow, type: string, targetKind: string, targetDeviceId: string | null, fileId: string | null,
+  payloadVersion: number, keyVersion: number | null, encryptionSalt: string | null, ciphertext: string, nonce: string, payloadJson: string | null): boolean {
   return row.type === type
     && row.target_kind === targetKind
     && (row.target_device_id ?? null) === targetDeviceId
     && (row.file_id ?? null) === fileId
-    && (row.payload_json ?? "{}") === payloadJson;
+    && Number(row.payload_version) === payloadVersion
+    && (row.key_version ?? null) === keyVersion
+    && (row.encryption_salt ?? null) === encryptionSalt
+    && String(row.ciphertext ?? "") === ciphertext
+    && String(row.nonce ?? "") === nonce
+    && (row.payload_json ?? null) === payloadJson;
 }
 
 export async function createPush(request: Request, env: Env, auth: AuthContext, requestId: string, runtime: Runtime): Promise<Response> {
@@ -71,10 +79,22 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
     return problem(422, "idempotency_key_mismatch", "Idempotency-Key and client_guid must match.", requestId);
   }
   const clientGuid = typeof body.client_guid === "string" ? body.client_guid : idempotencyKey ?? runtime.id("job");
+  const payloadVersion = body.payload_version === 2 ? 2 : 1;
+  if (env.REQUIRE_E2EE === "true" && payloadVersion !== 2) return problem(422, "e2ee_required", "Encrypted payload_version 2 is required.", requestId);
+  const encrypted = payloadVersion === 2;
   const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
-  const payloadJson = JSON.stringify(payload);
-  if (encoder.encode(payloadJson).byteLength > 2_000_000) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
-  if (type === "link") {
+  const payloadJson = encrypted ? null : JSON.stringify(payload);
+  const keyVersion = encrypted && typeof body.key_version === "number" && Number.isSafeInteger(body.key_version) && body.key_version >= 1 ? body.key_version : null;
+  const encryptionSalt = encrypted && typeof body.encryption_salt === "string" ? body.encryption_salt : null;
+  const ciphertext = encrypted && typeof body.ciphertext === "string" ? body.ciphertext : "";
+  const nonce = encrypted && typeof body.nonce === "string" ? body.nonce : "";
+  if (encrypted && (!keyVersion || !encryptionSalt || !ciphertext || !nonce
+    || ![encryptionSalt, ciphertext, nonce].every((value) => /^[A-Za-z0-9_-]+$/.test(value)))) {
+    return problem(422, "invalid_encrypted_payload", "key_version, encryption_salt, nonce, and ciphertext are required for payload_version 2.", requestId);
+  }
+  const encodedSize = encoder.encode(encrypted ? `${encryptionSalt}.${nonce}.${ciphertext}` : payloadJson ?? "").byteLength;
+  if (encodedSize > 2_000_000) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
+  if (!encrypted && type === "link") {
     const url = (payload as Record<string, unknown>).url;
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return problem(422, "invalid_link", "Link URLs must use http or https.", requestId);
   }
@@ -94,7 +114,7 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
 
   const replay = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first<PushRow>();
   if (replay) {
-    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadJson)) {
+    if (!payloadEquals(replay, type, targetKind, targetDeviceId, fileId, payloadVersion, keyVersion, encryptionSalt, ciphertext, nonce, payloadJson)) {
       return problem(409, "idempotency_conflict", "The Idempotency-Key was already used with a different request.", requestId);
     }
     await ensureFileDeliveries(env, replay, runtime);
@@ -117,13 +137,14 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
   const pushId = runtime.id("psh");
   try {
     await env.DB.prepare(`INSERT INTO pushes
-      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version,
+      (id, user_id, source_device_id, target_device_id, target_kind, type, file_id, payload_version, key_version, encryption_salt,
        ciphertext, nonce, payload_json, client_guid, created_at, modified_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'active')`)
-      .bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, fileId, "", "", payloadJson, clientGuid, now, now, expiresAt).run();
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`)
+      .bind(pushId, auth.user_id, auth.device_id, targetDeviceId, targetKind, type, fileId, payloadVersion, keyVersion,
+        encryptionSalt, ciphertext, nonce, payloadJson, clientGuid, now, now, expiresAt).run();
   } catch {
     const raced = await env.DB.prepare(`${PUSH_SELECT} WHERE p.user_id = ? AND p.client_guid = ?`).bind(auth.user_id, clientGuid).first<PushRow>();
-    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadJson)) throw new Error("push insert failed");
+    if (!raced || !payloadEquals(raced, type, targetKind, targetDeviceId, fileId, payloadVersion, keyVersion, encryptionSalt, ciphertext, nonce, payloadJson)) throw new Error("push insert failed");
     await ensureFileDeliveries(env, raced, runtime);
     await deliverFilePush(env, raced.id, new URL(request.url).origin, runtime);
     return json(pushOut(raced, auth.device_id), { headers: { "idempotent-replayed": "true", "x-request-id": requestId } });

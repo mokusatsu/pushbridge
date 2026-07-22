@@ -41,6 +41,7 @@ locals {
     AUTH_RATE_LIMIT                 = tostring(var.auth_rate_limit)
     ACCOUNT_AUTH_RATE_LIMIT         = tostring(var.account_auth_rate_limit)
     DEVICE_MUTATION_RATE_LIMIT      = tostring(var.device_mutation_rate_limit)
+    REQUIRE_E2EE                    = tostring(var.require_e2ee)
   }
 
   passkey_plain_text_vars = var.passkey_rp_id == null ? {} : {

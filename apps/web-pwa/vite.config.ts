@@ -26,6 +26,38 @@ function openLocalDatabase(namespace) {
   });
 }
 
+function asBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value && ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  throw new Error('E2EE account key is unavailable');
+}
+
+async function readAccountKey(db) {
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains('e2eeKeys')) { reject(new Error('E2EE key store is unavailable')); return; }
+    const request = db.transaction('e2eeKeys', 'readonly').objectStore('e2eeKeys').get('account-key');
+    request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error('E2EE account key is unavailable'));
+    request.onerror = () => reject(request.error || new Error('E2EE key read failed'));
+  });
+}
+
+async function decryptFileBlob(db, fileId, blob) {
+  const input = new Uint8Array(await blob.arrayBuffer());
+  if (input.byteLength < 53 || input[0] !== 80 || input[1] !== 66 || input[2] !== 70 || input[3] !== 69 || input[4] !== 1) throw new Error('Invalid encrypted File container');
+  const keyVersion = new DataView(input.buffer, input.byteOffset + 5, 4).getUint32(0, false);
+  const record = await readAccountKey(db);
+  if (record.key_version !== keyVersion) throw new Error('Encrypted File key version is unavailable');
+  const material = await crypto.subtle.importKey('raw', asBytes(record.key_bytes), 'HKDF', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({
+    name: 'HKDF', hash: 'SHA-256', salt: input.slice(9, 25), info: new TextEncoder().encode('pushbridge/file/v1/' + keyVersion),
+  }, material, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({
+    name: 'AES-GCM', iv: input.slice(25, 37), additionalData: new TextEncoder().encode('pushbridge/file/v1/' + fileId),
+  }, key, input.slice(37));
+  return new Blob([plaintext], { type: 'application/octet-stream' });
+}
+
 async function cacheFileFromPush(data) {
   const item = data?.file_download;
   if (!item?.download_url || !item?.file_id || !item?.push_id || !data?.storage_namespace) return false;
@@ -33,12 +65,13 @@ async function cacheFileFromPush(data) {
   if (downloadTarget.origin !== self.location.origin) throw new Error('Cross-origin background download rejected');
   const response = await fetch(downloadTarget.href, { cache: 'no-store', credentials: 'omit' });
   if (!response.ok) throw new Error('Background file download failed: ' + response.status);
-  const blob = await response.blob();
+  let blob = await response.blob();
   if (Number.isFinite(item.size) && item.size >= 0 && blob.size !== item.size) {
     throw new Error('Background file size mismatch');
   }
   const db = await openLocalDatabase(data.storage_namespace);
   try {
+    if (item.encrypted) blob = await decryptFileBlob(db, item.file_id, blob);
     const transaction = db.transaction(['cachedFiles', 'pushes'], 'readwrite');
     transaction.objectStore('cachedFiles').put({
       file_id: item.file_id,

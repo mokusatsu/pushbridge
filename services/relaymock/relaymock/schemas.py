@@ -191,6 +191,9 @@ class NotePlainPushCreate(_PushCreateCommon):
 
 
 class NoteEncryptedPushCreate(_PushCreateCommon):
+    payload_version: Literal[2] = 2
+    key_version: int = Field(ge=1)
+    encryption_salt: str = Field(min_length=1, max_length=1024)
     type: Literal["note"]
     file_id: None = None
     payload: None = None
@@ -207,6 +210,9 @@ class LinkPlainPushCreate(_PushCreateCommon):
 
 
 class LinkEncryptedPushCreate(_PushCreateCommon):
+    payload_version: Literal[2] = 2
+    key_version: int = Field(ge=1)
+    encryption_salt: str = Field(min_length=1, max_length=1024)
     type: Literal["link"]
     file_id: None = None
     payload: None = None
@@ -223,6 +229,9 @@ class FilePlainPushCreate(_PushCreateCommon):
 
 
 class FileEncryptedPushCreate(_PushCreateCommon):
+    payload_version: Literal[2] = 2
+    key_version: int = Field(ge=1)
+    encryption_salt: str = Field(min_length=1, max_length=1024)
     type: Literal["file"]
     file_id: str = Field(min_length=1, max_length=200)
     payload: None = None
@@ -281,6 +290,14 @@ class PushCreate(RootModel[_PushCreateVariant]):
         return self.root.nonce
 
     @property
+    def key_version(self) -> int | None:
+        return getattr(self.root, "key_version", None)
+
+    @property
+    def encryption_salt(self) -> str | None:
+        return getattr(self.root, "encryption_salt", None)
+
+    @property
     def client_guid(self) -> str | None:
         return self.root.client_guid
 
@@ -319,6 +336,8 @@ class PushOut(StrictModel):
     file_id: str | None
     file_ref: FileRef | None
     payload_version: int
+    key_version: int | None
+    encryption_salt: str | None
     payload: PayloadV1 | None
     ciphertext: str | None
     nonce: str | None
@@ -348,6 +367,7 @@ class FileInitIn(StrictModel):
     size: int = Field(ge=0)
     sha256: str | None = Field(default=None, pattern=r"^[A-Fa-f0-9]{64}$")
     expires_in: Literal[86_400, 604_800, 2_592_000] | None = None
+    encrypted: bool = False
 
 
 class FileOut(StrictModel):
@@ -365,6 +385,7 @@ class FileOut(StrictModel):
     deleted_at: datetime | None
     delete_reason: FileDeleteReason | None = None
     alias_expires_at: datetime | None = None
+    e2ee: bool = False
 
 
 class FileDeliveryEventIn(StrictModel):

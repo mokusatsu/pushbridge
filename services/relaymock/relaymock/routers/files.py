@@ -68,6 +68,8 @@ def init_file(
             "file_too_large",
             f"The local mock limit is {settings.max_file_size_bytes} bytes.",
         )
+    if body.encrypted and (body.filename != "encrypted.bin" or body.content_type != "application/octet-stream"):
+        raise http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_encrypted_file_metadata", "Encrypted files must use opaque metadata.")
     cleanup = cleanup_expired(database, settings, required_bytes=body.size)
     if cleanup["stored_or_reserved_bytes"] + body.size > settings.storage_budget_bytes:
         raise http_error(
@@ -93,10 +95,10 @@ def init_file(
             """
             INSERT INTO files(
                 id, user_id, object_key, original_name, content_type,
-                expected_size, actual_size, expected_sha256, actual_sha256,
+                expected_size, actual_size, e2ee, expected_sha256, actual_sha256,
                 state, created_at, completed_at, expires_at, deleted_at,
                 delete_reason, alias_expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?)
             """,
             (
                 file_id,
@@ -105,6 +107,7 @@ def init_file(
                 body.filename,
                 body.content_type,
                 body.size,
+                int(body.encrypted),
                 body.sha256.lower() if body.sha256 else None,
                 now_iso,
                 expires_at,

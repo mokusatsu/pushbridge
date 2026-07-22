@@ -18,6 +18,7 @@ export interface Env {
   AUTH_RATE_LIMIT?: string;
   ACCOUNT_AUTH_RATE_LIMIT?: string;
   DEVICE_MUTATION_RATE_LIMIT?: string;
+  REQUIRE_E2EE?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
@@ -64,6 +65,10 @@ export interface PushRow {
   type: string;
   file_id: string | null;
   payload_version: number;
+  key_version: number | null;
+  encryption_salt: string | null;
+  ciphertext: string | ArrayBuffer;
+  nonce: string | ArrayBuffer;
   payload_json: string | null;
   client_guid: string;
   pinned_at: number | null;
@@ -90,6 +95,7 @@ export interface FileRow {
   content_type: string;
   expected_size: number;
   actual_size: number | null;
+  e2ee: number;
   expected_sha256: string | null;
   actual_sha256: string | null;
   state: "pending" | "uploaded" | "ready" | "delete_pending" | "expired" | "deleted";

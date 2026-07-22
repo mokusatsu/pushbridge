@@ -22,6 +22,8 @@ export interface FileAttachment {
   deleted_at?: string | null;
   delete_reason?: FileDeleteReason | null;
   alias_expires_at?: string | null;
+  e2ee?: boolean;
+  client_file_id?: string;
 }
 
 export type FileDeliveryState = 'pending' | 'notified' | 'fetching' | 'cached' | 'failed_retryable' | 'missed';
@@ -52,6 +54,10 @@ export interface PushRecord {
   source_device_name?: string | null;
   target: PushTarget;
   payload_version?: number;
+  key_version?: number | null;
+  encryption_salt?: string | null;
+  ciphertext?: string | null;
+  nonce?: string | null;
   title?: string | null;
   body?: string | null;
   url?: string | null;
@@ -203,6 +209,11 @@ export interface SendPushRequest extends SendPushDraft {
   source_device_id?: string;
   file_id?: string;
   file?: FileAttachment;
+  payload_version?: number;
+  key_version?: number;
+  encryption_salt?: string;
+  ciphertext?: string;
+  nonce?: string;
 }
 
 export interface FileInitRequest {
@@ -211,6 +222,23 @@ export interface FileInitRequest {
   size: number;
   expires_in: number;
   sha256?: string;
+  encrypted?: boolean;
+}
+
+export interface E2eeStatus {
+  initialized: boolean;
+  current_key_version: number | null;
+  algorithm: string;
+  created_at: string | null;
+  current_device_has_envelope: boolean;
+  devices: Array<{ id: string; public_key: string; has_envelope: boolean }>;
+}
+
+export interface E2eeEnvelopeResponse<T = Record<string, unknown>> {
+  key_version: number;
+  algorithm: string;
+  envelope: T;
+  created_at: string;
 }
 
 export interface UploadInstruction {

@@ -326,7 +326,7 @@ docs/cloudflare-migration.md
 
 - RelayMockにはWebSocketがなく、推奨間隔によるRESTポーリングを使用
 - Web PushはSubscription登録までで、RelayMockによる配送は無効
-- E2EEは未実装で、Payloadはローカルモック上では平文
+- Cloudflare Workerで`features.e2ee=true`の場合、P-256端末鍵、HKDF-SHA-256、AES-256-GCMを使い、Note／Link／File metadataとFile Blobを送信前に暗号化する。復号後だけIndexedDBへ保存し、検索とオフライン表示は端末内データに対して行う。RelayMockの既定capabilityは互換性のためfalse。
 - Token保存はローカルPoC向けであり、本番認証ではない
 - ファイルのマルウェア検査はない
 - ブラウザー拡張機能はこの成果物に含まれない

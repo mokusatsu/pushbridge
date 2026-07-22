@@ -11,6 +11,7 @@ import type {
 } from "@simplewebauthn/server";
 import { base64UrlDecode, base64UrlEncode, ownedBuffer, sha256Hex } from "./crypto";
 import { deviceOut } from "./devices";
+import { validDevicePublicKey } from "./device-key";
 import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, DeviceRow, Env, Runtime } from "./types";
@@ -35,6 +36,7 @@ interface ChallengeRow {
   handle: string | null;
   device_name: string | null;
   device_kind: string | null;
+  device_public_key: string | null;
   expires_at: number;
 }
 
@@ -194,6 +196,10 @@ export async function registrationOptions(request: Request, env: Env, requestId:
   if (!validHandle(body.handle) || typeof body.device_name !== "string" || !body.device_name.trim()) {
     return problem(422, "validation_error", "handle and device_name are required.", requestId);
   }
+  const devicePublicKey = typeof body.device_public_key === "string" ? body.device_public_key : "";
+  if ((devicePublicKey && !validDevicePublicKey(devicePublicKey)) || (env.REQUIRE_E2EE === "true" && !devicePublicKey)) {
+    return problem(422, "invalid_device_public_key", "A P-256 device public key is required when E2EE is enabled.", requestId);
+  }
   if (await env.DB.prepare("SELECT id FROM users WHERE handle = ? AND deleted_at IS NULL").bind(body.handle).first()) {
     return problem(409, "handle_exists", "This handle already exists.", requestId);
   }
@@ -210,9 +216,10 @@ export async function registrationOptions(request: Request, env: Env, requestId:
   const challengeId = runtime.id("chl");
   const now = runtime.now();
   await env.DB.prepare(`INSERT INTO auth_challenges
-    (id, ceremony, challenge, pending_user_id, handle, device_name, device_kind, created_at, expires_at)
-    VALUES (?, 'registration', ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(challengeId, options.challenge, pendingUserId, body.handle, body.device_name.trim(), deviceKind(body.device_kind), now, now + CHALLENGE_TTL_MS).run();
+    (id, ceremony, challenge, pending_user_id, handle, device_name, device_kind, device_public_key, created_at, expires_at)
+    VALUES (?, 'registration', ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(challengeId, options.challenge, pendingUserId, body.handle, body.device_name.trim(), deviceKind(body.device_kind),
+      devicePublicKey, now, now + CHALLENGE_TTL_MS).run();
   return json({ challenge_id: challengeId, public_key: options, expires_at: iso(now + CHALLENGE_TTL_MS) }, { headers: { "x-request-id": requestId } });
 }
 
@@ -249,7 +256,7 @@ export async function registrationVerify(request: Request, env: Env, requestId: 
     env.DB.prepare(`INSERT INTO devices
       (id, user_id, kind, name_ciphertext, public_key, last_seen_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(deviceId, challenge.pending_user_id, challenge.device_kind ?? "pwa", challenge.device_name, credential.id, now, now, now),
+      .bind(deviceId, challenge.pending_user_id, challenge.device_kind ?? "pwa", challenge.device_name, challenge.device_public_key ?? "", now, now, now),
     env.DB.prepare(`INSERT INTO passkey_credentials
       (credential_id, user_id, device_id, public_key, counter, transports_json, device_type, backed_up, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -258,7 +265,7 @@ export async function registrationVerify(request: Request, env: Env, requestId: 
         verification.registrationInfo.credentialBackedUp ? 1 : 0, now, now),
   ]);
   const session = await issueBrowserSession(env, challenge.pending_user_id, deviceId, requestId, runtime);
-  const device: DeviceRow = { id: deviceId, user_id: challenge.pending_user_id, kind: challenge.device_kind ?? "pwa", name_ciphertext: challenge.device_name, public_key: credential.id, created_at: now, last_seen_at: now, revoked_at: null };
+  const device: DeviceRow = { id: deviceId, user_id: challenge.pending_user_id, kind: challenge.device_kind ?? "pwa", name_ciphertext: challenge.device_name, public_key: challenge.device_public_key ?? "", created_at: now, last_seen_at: now, revoked_at: null };
   return json({
     user: { id: challenge.pending_user_id, handle: challenge.handle, created_at: iso(now) },
     device: deviceOut(device, deviceId),

@@ -226,8 +226,11 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
             "type": "file",
             "file_id": file_id,
             "target": {"kind": "device", "device_id": linked["device"]["id"]},
-            "ciphertext": "base64url-ciphertext",
-            "nonce": "base64url-nonce",
+                "ciphertext": "base64url-ciphertext",
+                "nonce": "base64url-nonce",
+                "payload_version": 2,
+                "key_version": 1,
+                "encryption_salt": "base64url-salt",
         },
     )
     assert file_push.status_code == 201, file_push.text
@@ -275,8 +278,11 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
             "type": "file",
             "file_id": file_id,
             "target": {"kind": "device", "device_id": third["device"]["id"]},
-            "ciphertext": "base64url-ciphertext-2",
-            "nonce": "base64url-nonce-2",
+                "ciphertext": "base64url-ciphertext-2",
+                "nonce": "base64url-nonce-2",
+                "payload_version": 2,
+                "key_version": 1,
+                "encryption_salt": "base64url-salt-2",
         },
     )
     assert missed_push.status_code == 201
@@ -557,8 +563,11 @@ def test_file_state_changes_reenter_push_cursor_stream(
         json={
             "type": "file",
             "file_id": file_id,
-            "ciphertext": "encrypted-payload",
-            "nonce": "nonce",
+                "ciphertext": "encrypted-payload",
+                "nonce": "nonce",
+                "payload_version": 2,
+                "key_version": 1,
+                "encryption_salt": "salt",
         },
     )
     assert created.status_code == 201, created.text
@@ -726,6 +735,9 @@ def test_openapi_matches_runtime_contract(client: TestClient) -> None:
     assert components["schemas"]["LinkPayloadV1"]["properties"]["url"][
         "format"
     ] == "uri"
+    encrypted = components["schemas"]["NoteEncryptedPushCreate"]
+    assert encrypted["properties"]["payload_version"]["const"] == 2
+    assert {"key_version", "encryption_salt"}.issubset(encrypted["required"])
 
     upload = document["paths"]["/mock-storage/uploads/{ticket}"]["put"]
     upload_schema = upload["requestBody"]["content"]["application/octet-stream"][

@@ -107,6 +107,8 @@ def push_from_row(row: sqlite3.Row, current_device_id: str) -> PushOut:
         file_id=row["file_id"],
         file_ref=file_ref,
         payload_version=row["payload_version"],
+        key_version=row["key_version"],
+        encryption_salt=row["encryption_salt"],
         payload=payload,
         ciphertext=row["ciphertext"],
         nonce=row["nonce"],
@@ -139,6 +141,7 @@ def file_from_row(row: sqlite3.Row) -> FileOut:
         deleted_at=row["deleted_at"],
         delete_reason=row["delete_reason"],
         alias_expires_at=row["alias_expires_at"],
+        e2ee=bool(row["e2ee"]),
     )
 
 
