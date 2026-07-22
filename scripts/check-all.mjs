@@ -54,12 +54,12 @@ run(python, ["-m", "pytest", "services/relaymock"], {
   },
 });
 run(npm, [...npmPrefix, "--prefix", "apps/web-pwa", "run", "check"]);
+run(npm, [...npmPrefix, "run", "worker:check"]);
 const terraformFiles = readdirSync(join(process.cwd(), "infra", "cloudflare", "infra"))
   .filter((name) => name.endsWith(".tf") && name !== "backend.tf")
   .sort();
 run(terraform, ["-chdir=infra/cloudflare/infra", "fmt", "-check", ...terraformFiles]);
 run(terraform, ["-chdir=infra/cloudflare/infra", "validate"]);
-run(process.execPath, ["--check", "infra/cloudflare/worker/index.mjs"]);
 run(process.execPath, ["--check", "infra/cloudflare/app/dist/sw.js"]);
 run(process.execPath, ["--check", "infra/cloudflare/scripts/render-wrangler-config.mjs"]);
 run(process.execPath, ["--check", "infra/cloudflare/scripts/diagnose-terraform-state.mjs"]);

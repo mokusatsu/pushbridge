@@ -13,6 +13,8 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 
 同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link、cursor同期、pin／dismiss／delete、storage usageを実装済みです。File API、Web Push配送、WebSocket realtime、正式認証は未実装で、Capabilitiesも未完成機能を`false`として返します。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
+Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
+
 ## ディレクトリ構成
 
 ```text

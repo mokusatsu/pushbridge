@@ -14,17 +14,17 @@
 | 項目 | 状態 |
 |---|---|
 | RP-001 モノレポ／共通check | 部分完了。React PWA、RelayMock、Cloudflare IaCを単一workspaceで検証可能 |
-| RP-002 Worker TypeScript化 | 未完了。実APIは単一`worker/index.mjs`に実装済み |
-| RP-003 Cloudflare統合test | 部分完了。D1／R2／DO bindingを使うlocal smokeはあるが、Worker routeの独立した統合test suiteが不足 |
-| RP-201 Push作成と冪等性 | PoC実装済み。cross-user target、100回再送などの堅牢化試験が不足 |
-| RP-202 cursor同期 | PoC実装済み。署名、改変拒否、200件超paginationが不足 |
+| RP-002 Worker TypeScript化 | PoC完了。route／auth／response等を`worker/src`へ分割し、Terraform投入用bundleを再現可能に生成 |
+| RP-003 Cloudflare統合test | PoC完了。公式Workers Vitest poolでD1 migration、R2、DO、主要routeを9件検証 |
+| RP-201 Push作成と冪等性 | PoC完了。cross-user target拒否、UTF-8 byte上限、同一key 100回再送を統合test済み |
+| RP-202 cursor同期 | PoC完了。user／device／sessionに束縛した署名cursor、改変拒否、205件paginationを統合test済み |
 | RP-203 dismiss／pin／delete | PoC実装済み。保持期限cleanupは不足 |
 | RP-204 Link | PoC実装済み。安全なscheme検証を再確認する必要あり |
 | RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
 | RP-601〜605 Worker File／R2 | RelayMockのみ実装済み。Cloudflare Worker側は未実装 |
 | RP-502〜503 Web Push | RelayMock subscriptionのみ。Worker配送とcached ACKは未実装 |
 
-Cloudflare devではTerraform、D1 migration 0001／0002、Worker、PWA、Accessを適用済み。現在の優先順はWorkerの分割・既存API堅牢化、File API＋R2縦切り、Web Push配送確認、保持期限cleanupである。
+Cloudflare devではTerraform、D1 migration 0001〜0003、TypeScript Worker bundle、PWA、Accessを適用済み。現在の優先順はFile API＋R2縦切り、Web Push配送確認、保持期限cleanupである。
 
 ## Epic E0 — リポジトリと開発基盤
 

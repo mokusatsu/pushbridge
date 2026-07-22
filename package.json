@@ -4,6 +4,10 @@
   "type": "module",
   "scripts": {
     "check": "node scripts/check-all.mjs",
+    "worker:build": "esbuild infra/cloudflare/worker/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=infra/cloudflare/worker/index.mjs --sourcemap=external --sources-content=false",
+    "worker:typecheck": "tsc -p infra/cloudflare/worker/tsconfig.json --noEmit",
+    "worker:test": "vitest run --config infra/cloudflare/worker/vitest.config.ts",
+    "worker:check": "npm run worker:build && npm run worker:typecheck && npm run worker:test",
     "cloudflare:state:diagnose": "node infra/cloudflare/scripts/diagnose-terraform-state.mjs",
     "cloudflare:wrangler:render": "node infra/cloudflare/scripts/render-wrangler-config.mjs",
     "cloudflare:local:migrate": "npx --yes wrangler@4 d1 migrations apply DB --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler",
@@ -13,5 +17,12 @@
   },
   "engines": {
     "node": ">=22.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.7",
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.0"
   }
 }

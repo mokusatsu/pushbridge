@@ -84,6 +84,29 @@ variable "enable_preview_urls" {
   default     = false
 }
 
+variable "enable_dev_bootstrap" {
+  description = "Enable the temporary development-only bootstrap endpoint. Keep false outside an Access-protected dev environment."
+  type        = bool
+  default     = false
+}
+
+variable "require_dev_bootstrap_turnstile" {
+  description = "Require a valid Turnstile token on the temporary development bootstrap endpoint."
+  type        = bool
+  default     = false
+}
+
+variable "dev_bootstrap_rate_limit" {
+  description = "Maximum bootstrap attempts per source IP in a ten-minute window."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.dev_bootstrap_rate_limit >= 1 && var.dev_bootstrap_rate_limit <= 100
+    error_message = "dev_bootstrap_rate_limit must be between 1 and 100."
+  }
+}
+
 variable "access_ip_allowlist" {
   description = "Optional Cloudflare Access application that restricts the complete Worker hostname, including Static Assets, to source IP CIDRs. Set to null to disable."
   type = object({

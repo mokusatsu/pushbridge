@@ -9,6 +9,7 @@ VENV_PYTHON := $(VENV)/bin/python
 setup:
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install -e 'services/relaymock[dev]'
+	npm ci
 	cd apps/web-pwa && npm ci
 
 check: check-contract check-server check-client

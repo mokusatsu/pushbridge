@@ -25,11 +25,14 @@ locals {
   )))
 
   reserved_plain_text_vars = {
-    APP_ENVIRONMENT       = var.environment
-    APP_NAME              = var.project_name
-    R2_BUCKET_NAME        = local.r2_name
-    TURNSTILE_SITE_KEY    = cloudflare_turnstile_widget.registration.sitekey
-    FILE_RETENTION_POLICY = jsonencode(var.file_retention_seconds)
+    APP_ENVIRONMENT                 = var.environment
+    APP_NAME                        = var.project_name
+    ENABLE_DEV_BOOTSTRAP            = tostring(var.enable_dev_bootstrap)
+    REQUIRE_DEV_BOOTSTRAP_TURNSTILE = tostring(var.require_dev_bootstrap_turnstile)
+    DEV_BOOTSTRAP_RATE_LIMIT        = tostring(var.dev_bootstrap_rate_limit)
+    R2_BUCKET_NAME                  = local.r2_name
+    TURNSTILE_SITE_KEY              = cloudflare_turnstile_widget.registration.sitekey
+    FILE_RETENTION_POLICY           = jsonencode(var.file_retention_seconds)
   }
 
   plain_text_vars = merge(

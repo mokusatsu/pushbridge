@@ -6,6 +6,7 @@ data/
 *.db
 *.sqlite3
 *.log
+infra/cloudflare/worker/index.mjs.map
 .DS_Store
 env.txt
 .wrangler/

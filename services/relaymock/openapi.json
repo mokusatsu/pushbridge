@@ -1766,6 +1766,18 @@
               }
             ],
             "title": "Public Key"
+          },
+          "turnstile_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnstile Token"
           }
         },
         "additionalProperties": false,

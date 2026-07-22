@@ -96,6 +96,7 @@ export interface BootstrapRequest {
   device_name: string;
   device_kind?: Exclude<DeviceKind, 'unknown'>;
   public_key?: string | null;
+  turnstile_token?: string | null;
 }
 
 export interface DeviceCredential {

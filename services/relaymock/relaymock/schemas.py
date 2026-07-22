@@ -65,6 +65,7 @@ class BootstrapIn(StrictModel):
     device_name: str = Field(min_length=1, max_length=100)
     device_kind: DeviceKind = "web"
     public_key: str | None = Field(default=None, max_length=8192)
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class BootstrapOut(StrictModel):
