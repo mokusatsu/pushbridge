@@ -23,7 +23,7 @@ import { newId } from '@/utils/id';
 import { decodeVapidPublicKey, getActiveServiceWorkerRegistration, subscriptionToInput, webPushSupport } from './webPush';
 
 const DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024;
-const DEFAULT_FILE_TTL_SECONDS = 86_400;
+const DEFAULT_FILE_TTL_SECONDS = 2_592_000;
 const MAX_SYNC_PAGES = 50;
 
 function nowIso(): string {

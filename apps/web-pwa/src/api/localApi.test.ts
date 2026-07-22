@@ -75,7 +75,7 @@ const capabilitiesWire = {
     max_push_payload_bytes: 2_000_000,
     file_ttl_seconds: [86_400, 604_800, 2_592_000],
     default_push_ttl_seconds: 2_592_000,
-    default_file_ttl_seconds: 86_400,
+    default_file_ttl_seconds: 2_592_000,
     max_devices: 10,
   },
   transports: { realtime: ['poll'], upload: ['server-ticket'] },
@@ -138,11 +138,21 @@ describe('RelayMock LocalApi adapter', () => {
       limits: {
         max_push_payload_bytes: 2_000_000,
         default_push_ttl_seconds: 2_592_000,
-        default_file_ttl_seconds: 86_400,
+        default_file_ttl_seconds: 2_592_000,
       },
       recommended_poll_interval_seconds: 30,
     });
     expect(config).toMatchObject({ subscription_registration: true, delivery: false });
+  });
+
+  it('uses the fixed 30-day file default when an older capabilities payload omits it', async () => {
+    const { default_file_ttl_seconds: _omitted, ...limits } = capabilitiesWire.limits;
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...capabilitiesWire, limits })));
+
+    const api = new LocalApi(new ApiClient(settings));
+    await expect(api.getCapabilities()).resolves.toMatchObject({
+      limits: { default_file_ttl_seconds: 2_592_000 },
+    });
   });
 
   it('accepts file_ref and uses it without an extra metadata request', async () => {

@@ -10,8 +10,9 @@
 | RelayMock pytest | 24件合格 |
 | OpenAPI正本／RelayMock／PWAコピー | 一致 |
 | PWA OpenAPI契約検査／TypeScript／production build | 合格 |
-| PWA Vitest | 30件合格（サーバー削除後のIndexedDB Blob維持、upload進捗／cancel、端末別配送状態を含む） |
-| Playwright実ブラウザー | Edge desktop／mobile各1件合格。二端末Note／Link／File、IndexedDB、server削除後offline reload、missed、通知拒否、keyboard／ARIA／reduced-motionを検証 |
+| PWA Vitest | 31件合格（サーバー削除後のIndexedDB Blob維持、upload進捗／cancel、端末別配送状態、30日TTL fallbackを含む） |
+| Playwright実ブラウザー | Chromium desktop 2件／mobile 1件合格。二端末Note／Link／File、IndexedDB、server削除後offline reload、missed、Service Worker実更新、通知拒否、keyboard／ARIA／reduced-motionを検証 |
+| Phase 5時系列証跡 | 実Chromiumのスクリーンショット5枚、匿名化API method/path/status 71件、IndexedDB状態5時点を自己完結HTMLへ記録。認証情報・body・Web Push endpoint・file bytesなし |
 | RelayMock実HTTP smoke | Note／Link／File／subscriptionを含め合格 |
 | Terraform fmt／validate | Terraform 1.14.3、Cloudflare Provider 5.22.0で合格 |
 | D1 migration 0001〜0007 | Wrangler／Miniflareとremote適用に合格、schema version 7。remoteで配送台帳・使用量表／列を読取確認 |
@@ -34,7 +35,7 @@
 | R2 presigned direct upload | 未実装。現在はprivate R2 bindingのserver-ticket PoCで、Capabilitiesは`direct_upload=false` |
 | Worker Web Push配送／受領確認 | source／local test、dev migration、VAPID／data key bindingは適用済み。Access資格情報不足で適用後HTTP smokeとChromium実配送は未確認 |
 | Worker WebSocket realtime | 未実装。REST cursor同期が正本 |
-| 実ブラウザーFile E2E | local Playwrightで画面・IndexedDB・offline・missedを自動化済み。dev実Web Pushを受けたPWA終了中の自動保存は未確認 |
+| 実ブラウザーFile E2E | local Playwrightで画面・IndexedDB・offline・missed・Service Worker更新と時系列HTMLを自動化済み。dev実Web Pushを受けたPWA終了中の自動保存は未確認 |
 | Passkey／Turnstile検証／E2EE／レート制限 | 公開前の必須未実装項目 |
 
 ## 判定

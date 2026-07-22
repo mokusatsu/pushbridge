@@ -25,8 +25,9 @@ R2 fixtureは暗号化済みbytesだけを使用した。WranglerとCloudflare R
 |---|---|
 | RelayMock pytest | 24件合格 |
 | OpenAPI正本／RelayMock／PWAコピー | 一致 |
-| PWA契約検査、TypeScript、Vitest、production build | 合格（Vitest 30件。XHR upload進捗／cancel、配送状態表示を含む） |
-| Playwright実ブラウザー | Edgeでdesktop 1件／mobile 1件合格。二端末Note／Link／File、IndexedDB、server削除後offline reload、missed、通知拒否、keyboard／ARIA／reduced-motionを検証 |
+| PWA契約検査、TypeScript、Vitest、production build | 合格（Vitest 31件。XHR upload進捗／cancel、配送状態表示、30日TTL fallbackを含む） |
+| Playwright実ブラウザー | Chromiumでdesktop 2件／mobile 1件合格。二端末Note／Link／File、IndexedDB、server削除後offline reload、missed、Service Worker実更新、通知拒否、keyboard／ARIA／reduced-motionを検証 |
+| Phase 5時系列証跡 | 実スクリーンショット5枚、匿名化API 71件、IndexedDB状態5時点を`apps/web-pwa/evidence/phase5-browser-evidence.html`へ記録。secret／body／endpoint／file bytesなし |
 | Worker TypeScript、bundle、公式Workers Vitest pool | 合格（18件。Web Push暗号／失効／配送台帳、TTL／pressure cleanup、R2/D1 fault injectionを含む） |
 | RelayMock実HTTP smoke | Note、Link、File、subscriptionを含め合格 |
 | Terraform fmt / validate | Cloudflare Provider v5.22.0で合格 |

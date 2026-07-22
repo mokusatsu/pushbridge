@@ -343,7 +343,7 @@ export const capabilitiesSchema = capabilitiesWireSchema.transform((value): Syst
     max_push_payload_bytes: value.limits.max_push_payload_bytes ?? 2_000_000,
     file_ttl_seconds: value.limits.file_ttl_seconds,
     default_push_ttl_seconds: value.limits.default_push_ttl_seconds ?? 2_592_000,
-    default_file_ttl_seconds: value.limits.default_file_ttl_seconds ?? 86_400,
+    default_file_ttl_seconds: value.limits.default_file_ttl_seconds ?? 2_592_000,
     file_alias_ttl_seconds: value.limits.file_alias_ttl_seconds ?? 15_552_000,
     max_devices: value.limits.max_devices,
   },

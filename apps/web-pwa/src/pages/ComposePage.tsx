@@ -40,9 +40,9 @@ export function ComposePage() {
   const capabilities = snapshot.capabilities;
   const maxFileBytes = capabilities?.limits.max_file_bytes ?? 25 * 1024 * 1024;
   const maxPushPayloadBytes = capabilities?.limits.max_push_payload_bytes ?? 2_000_000;
-  const fileUpload = capabilities ? capabilities.transports.upload.length > 0 : true;
+  const fileUpload = capabilities ? capabilities.transports.upload.length > 0 : false;
   const defaultPushTtl = capabilities?.limits.default_push_ttl_seconds ?? 2_592_000;
-  const defaultFileTtl = capabilities?.limits.default_file_ttl_seconds ?? 86_400;
+  const defaultFileTtl = capabilities?.limits.default_file_ttl_seconds ?? 2_592_000;
 
   const fileTtls = useMemo(() => {
     const values = capabilities?.limits.file_ttl_seconds ?? [86_400, 604_800, 2_592_000];

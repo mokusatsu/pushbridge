@@ -15,7 +15,8 @@
     "cloudflare:local:migrate": "npx --yes wrangler@4 d1 migrations apply DB --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler",
     "cloudflare:local:dev": "npx --yes wrangler@4 dev --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler --ip 127.0.0.1 --port 8787",
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",
-    "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs"
+    "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs",
+    "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"
   },
   "engines": {
     "node": ">=22.12"

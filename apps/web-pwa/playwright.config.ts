@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const localChannel = process.platform === 'win32' && !process.env.CI ? 'msedge' : undefined;
+const requestedChannel = process.env.PUSHBRIDGE_PLAYWRIGHT_CHANNEL;
+const localChannel = requestedChannel === 'bundled'
+  ? undefined
+  : requestedChannel || (process.platform === 'win32' && !process.env.CI ? 'msedge' : undefined);
 
 export default defineConfig({
   testDir: './e2e',

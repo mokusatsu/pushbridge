@@ -23,7 +23,7 @@
 | RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
 | RP-601〜605 Worker File／R2 | Phase 2 PoC実装済み。private R2 server-ticket、File Push、25 MiB境界、削除／410を統合test。presigned URL、暗号化、定期cleanupは未実装 |
 | RP-502〜503 Web Push | Phase 3 source／local PoCとdev適用済み。subscription暗号化、VAPID、標準暗号、失効、限定retry、端末別ACKを検証。Access資格情報不足でChromium実配送は未完了 |
-| RP-501／504 PWA File UX | Phase 5 local実装済み。upload進捗／cancel／retry、送信側の配送待ち／通知済み／取得中／保存済み／再試行中／取得不可を契約APIから表示。Playwright desktop／mobile E2E合格。dev実Web Push E2Eは未完了 |
+| RP-501／504 PWA File UX | Phase 5 local実装済み。upload進捗／cancel／retry、送信側の配送待ち／通知済み／取得中／保存済み／再試行中／取得不可を契約APIから表示。Playwright desktop／mobile、Service Worker実更新、単一時系列HTML証跡まで合格。dev実Web Push E2Eは未完了 |
 
 Cloudflare devではTerraform、D1 migration 0001〜0007、TypeScript Worker bundle、PWA、Web Push／retention binding、Accessを適用済み。Phase 2 Service Auth remote smoke、schema version 7、post-apply Plan差分なしを確認した。現在の優先順はAccess Service Token資格情報の再設定、実Web Push配送、PWA終了中のcached ACK実測、実Cron観測である。
 

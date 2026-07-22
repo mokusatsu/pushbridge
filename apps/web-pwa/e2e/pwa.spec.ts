@@ -1,4 +1,7 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
+import { BrowserEvidence } from './browserEvidence';
 
 const origin = 'http://127.0.0.1:8766';
 const settingsKey = 'pushbridge.client-settings.v2';
@@ -87,11 +90,14 @@ async function fileIdByName(request: APIRequestContext, token: string, name: str
 
 test('two devices preserve a received File in IndexedDB and expose missed delivery @desktop', async ({ browser, request }) => {
   const { first, second, namespace } = await createCredentials(request);
+  const evidence = new BrowserEvidence(browser.version());
   const contextA = await browser.newContext({ baseURL: origin, viewport: { width: 1440, height: 1000 } });
   const contextB = await browser.newContext({ baseURL: origin, viewport: { width: 1280, height: 900 } });
   try {
     const pageA = await openClient(contextA, first.access_token, first.device.id, namespace);
     const pageB = await openClient(contextB, second.access_token, second.device.id, namespace);
+    evidence.observe(pageA, '端末A');
+    evidence.observe(pageB, '端末B');
 
     const noteTitle = `Note ${Date.now()}`;
     await sendNote(pageA, noteTitle);
@@ -110,8 +116,10 @@ test('two devices preserve a received File in IndexedDB and expose missed delive
 
     const cachedName = `cached-${Date.now()}.bin`;
     await sendFile(pageA, cachedName, 'cached-file-bytes');
+    await evidence.capture(pageA, '端末AからFile送信後', namespace);
     await sync(pageB);
     await expect(pageB.getByText('この端末に保存済み').first()).toBeVisible();
+    await evidence.capture(pageB, '端末Bの同期とIndexedDB自動保存後', namespace);
     const cachedCount = await pageB.evaluate(async ({ namespace: storage, cachedName: expected }) => {
       const dbName = `pushbridge-${storage.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')}-v2`;
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -136,6 +144,7 @@ test('two devices preserve a received File in IndexedDB and expose missed delive
     expect(deleteCached.ok()).toBeTruthy();
     await sync(pageB);
     await expect(pageB.getByText('この端末に保存済み').first()).toBeVisible();
+    await evidence.capture(pageB, 'サーバー本体削除後も端末内Blobを維持', namespace);
 
     await pageB.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
     await pageB.reload();
@@ -143,6 +152,7 @@ test('two devices preserve a received File in IndexedDB and expose missed delive
     await contextB.setOffline(true);
     await pageB.reload();
     await expect(pageB.getByRole('heading', { name: cachedName })).toBeVisible();
+    await evidence.capture(pageB, 'オフライン再読み込み後のローカル表示', namespace);
     await contextB.setOffline(false);
 
     await contextB.setOffline(true);
@@ -156,9 +166,35 @@ test('two devices preserve a received File in IndexedDB and expose missed delive
     await contextB.setOffline(false);
     await sync(pageB);
     await expect(pageB.getByText('この端末では同期できず、サーバーから削除されました。')).toBeVisible();
+    await evidence.capture(pageB, '未保存ファイルのmissed表示', namespace);
   } finally {
+    await evidence.write();
     await contextA.close();
     await contextB.close();
+  }
+});
+
+test('service worker exposes and applies a real byte-level update @desktop', async ({ page }) => {
+  const serviceWorkerPath = fileURLToPath(new URL('../../../infra/cloudflare/app/dist/sw.js', import.meta.url));
+  const original = await readFile(serviceWorkerPath, 'utf8');
+  try {
+    await page.goto(`${origin}/#/timeline`);
+    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await writeFile(serviceWorkerPath, `${original}\n// playwright-update-${Date.now()}\n`, 'utf8');
+    await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      await registration?.update();
+    });
+    await expect(page.getByText('新しいWeb/PWAバージョンを利用できます。')).toBeVisible();
+    const update = page.getByRole('button', { name: '更新', exact: true });
+    await expect(update).toBeEnabled();
+    await Promise.all([page.waitForEvent('load'), update.click()]);
+    await expect.poll(() => page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      return Boolean(navigator.serviceWorker.controller) && !registration?.waiting;
+    })).toBe(true);
+  } finally {
+    await writeFile(serviceWorkerPath, original, 'utf8');
   }
 });
 

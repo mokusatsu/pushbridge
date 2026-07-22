@@ -58,6 +58,8 @@ npm run cloudflare:remote:smoke
 
 初回のLinux／ブラウザー未導入環境では`npm run --prefix apps/web-pwa test:e2e:install`でChromiumを準備します。Windowsでは既存Edgeを利用できます。
 
+Phase 5の実測証跡は`npm run pwa:evidence`で再生成します。現在の記録は実Chromiumの5画面、匿名化したAPI method/path/status 71件、IndexedDB状態5時点を単一の`apps/web-pwa/evidence/phase5-browser-evidence.html`へまとめています（API件数は実行タイミングにより変動します）。
+
 PWAのproduction buildは`infra/cloudflare/app/dist`へ直接生成され、Terraform Worker Static Assets、ローカルWrangler、`serve:local`、Playwrightのすべてが同じ成果物を配信します。
 
 `cloudflare:remote:smoke`はAccess許可済みの実行元から、公開dev Workerに一意なテストユーザーを作成し、端末2台・Bearer認証・Note・冪等性・cursor同期・PWAを検証します。検証用Pushと端末Bは終了時に削除／失効します。

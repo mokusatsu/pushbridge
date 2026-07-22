@@ -12,11 +12,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "evidence:browser": "node tools/generate-browser-evidence.mjs",
     "test:e2e:install": "playwright install --with-deps chromium",
     "typecheck": "tsc -b --pretty false",
-    "check": "npm run check:contract && npm run typecheck && npm run test && npm run build",
+    "check": "npm run check:contract && npm run check:evidence && npm run typecheck && npm run test && npm run build",
     "smoke:api": "node tools/api-smoke.mjs",
-    "check:contract": "node tools/contract-check.mjs"
+    "check:contract": "node tools/contract-check.mjs",
+    "check:evidence": "node tools/check-browser-evidence.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",

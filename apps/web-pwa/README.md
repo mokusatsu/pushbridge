@@ -119,6 +119,17 @@ http://127.0.0.1:4173
 
 `serve:local`は`dist/`を配信し、APIプレフィックスの変換とTicket URLの転送を行います。
 
+## Phase 5ブラウザー証跡
+
+実Chromiumの画面、匿名化したAPI method/path/status、IndexedDB件数を一つの自己完結HTMLへ記録します。Windowsでも`make`は不要です。
+
+```bash
+npm run --prefix apps/web-pwa test:e2e:install
+npm run pwa:evidence
+```
+
+出力は`apps/web-pwa/evidence/phase5-browser-evidence.html`です。認証ヘッダー、Token、request/response body、Web Push endpoint、ファイルbytesは記録しません。
+
 ## 認証
 
 RelayMockの通常APIは端末スコープBearer Tokenを要求します。初回接続は次を使用します。
