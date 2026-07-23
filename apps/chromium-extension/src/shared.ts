@@ -5,11 +5,11 @@ export const API_ORIGIN = typeof __PUSHBRIDGE_EXTENSION_API_ORIGIN__ === 'string
   : 'https://pushbridge-dev.mokusatsu.workers.dev';
 export const API_BASE_PATH = '/api/v1';
 
-export type PushType = 'note' | 'link';
+export type PushType = 'note' | 'link' | 'file';
 export type PushTarget = { kind: 'all_other_devices' } | { kind: 'device'; device_id: string };
 
 export interface Draft {
-  type: PushType;
+  type: 'note' | 'link';
   title?: string;
   body?: string;
   url?: string;
@@ -52,6 +52,16 @@ function owned(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
+}
+
+function concat(...parts: Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+  return output;
 }
 
 async function importDevicePublicKey(value: string): Promise<CryptoKey> {
@@ -137,6 +147,57 @@ export async function decryptPushPayload(
     additionalData: new TextEncoder().encode(context),
   }, key, owned(decodeBase64Url(envelope.ciphertext)));
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(plaintext)) as Record<string, unknown>;
+}
+
+const FILE_MAGIC = new TextEncoder().encode('PBFE');
+const FILE_HEADER_BYTES = 4 + 1 + 4 + 16 + 12;
+
+export async function encryptFile(
+  accountKey: Uint8Array,
+  keyVersion: number,
+  clientFileId: string,
+  plaintext: ArrayBuffer,
+  random: RandomBytes = defaultRandom,
+): Promise<ArrayBuffer> {
+  const salt = random(16);
+  const nonce = random(12);
+  if (accountKey.byteLength !== 32 || salt.byteLength !== 16 || nonce.byteLength !== 12) {
+    throw new Error('Invalid File encryption input');
+  }
+  const context = `pushbridge/file/v1/${clientFileId}`;
+  const key = await deriveAesKey(accountKey, salt, `pushbridge/file/v1/${keyVersion}`);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({
+    name: 'AES-GCM',
+    iv: owned(nonce),
+    additionalData: new TextEncoder().encode(context),
+  }, key, plaintext));
+  const version = new Uint8Array(5);
+  version[0] = 1;
+  new DataView(version.buffer).setUint32(1, keyVersion, false);
+  return owned(concat(FILE_MAGIC, version, salt, nonce, ciphertext));
+}
+
+export async function decryptFile(
+  accountKey: Uint8Array,
+  clientFileId: string,
+  encrypted: ArrayBuffer,
+): Promise<ArrayBuffer> {
+  const bytes = new Uint8Array(encrypted);
+  if (bytes.byteLength < FILE_HEADER_BYTES + 16
+    || !FILE_MAGIC.every((byte, index) => bytes[index] === byte)
+    || bytes[4] !== 1) throw new Error('Invalid encrypted File container');
+  const keyVersion = new DataView(bytes.buffer, bytes.byteOffset + 5, 4).getUint32(0, false);
+  if (keyVersion < 1) throw new Error('Invalid encrypted File key version');
+  const salt = bytes.slice(9, 25);
+  const nonce = bytes.slice(25, 37);
+  const ciphertext = bytes.slice(37);
+  const context = `pushbridge/file/v1/${clientFileId}`;
+  const key = await deriveAesKey(accountKey, salt, `pushbridge/file/v1/${keyVersion}`);
+  return crypto.subtle.decrypt({
+    name: 'AES-GCM',
+    iv: owned(nonce),
+    additionalData: new TextEncoder().encode(context),
+  }, key, owned(ciphertext));
 }
 
 export function payloadForDraft(draft: Draft): Record<string, unknown> {

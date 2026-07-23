@@ -14,10 +14,19 @@ const npm = windows ? process.execPath : 'npm';
 const npmPrefix = windows ? [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')] : [];
 const npx = windows ? process.execPath : 'npx';
 const npxPrefix = windows ? [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npx-cli.js')] : [];
-const origin = 'http://127.0.0.1:8791';
+const remoteOrigin = process.env.PUSHBRIDGE_EXTENSION_E2E_ORIGIN?.replace(/\/+$/u, '');
+const remoteMode = Boolean(remoteOrigin);
+const origin = remoteOrigin ?? 'http://127.0.0.1:8791';
 const config = 'infra/cloudflare/wrangler.local.jsonc';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
+const accessHeaders = remoteMode ? {
+  'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID,
+  'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET,
+} : {};
+if (remoteMode && (!accessHeaders['CF-Access-Client-Id'] || !accessHeaders['CF-Access-Client-Secret'])) {
+  throw new Error('Remote extension E2E requires Cloudflare Access service-token environment variables.');
+}
 
 function run(command, args, env = process.env) {
   const result = spawnSync(command, args, { stdio: 'inherit', env, shell: false });
@@ -97,8 +106,22 @@ async function decryptPush(accountKey, item) {
   return JSON.parse(decoder.decode(plaintext));
 }
 
+async function decryptFileContainer(accountKey, fileId, encrypted) {
+  const bytes = encrypted instanceof Uint8Array ? encrypted : new Uint8Array(encrypted);
+  assert.equal(decoder.decode(bytes.slice(0, 4)), 'PBFE');
+  assert.equal(bytes[4], 1);
+  const keyVersion = new DataView(bytes.buffer, bytes.byteOffset + 5, 4).getUint32(0, false);
+  const key = await deriveAesKey(accountKey, bytes.slice(9, 25), `pushbridge/file/v1/${keyVersion}`);
+  return new Uint8Array(await crypto.subtle.decrypt({
+    name: 'AES-GCM',
+    iv: owned(bytes.slice(25, 37)),
+    additionalData: encoder.encode(`pushbridge/file/v1/${fileId}`),
+  }, key, owned(bytes.slice(37))));
+}
+
 async function request(path, init = {}, token) {
   const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(accessHeaders)) if (value) headers.set(name, value);
   headers.set('Accept', 'application/json');
   if (init.body) headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -118,6 +141,21 @@ async function waitForPush(token, predicate) {
   throw new Error('Timed out waiting for extension push');
 }
 
+async function extensionRequest(page, message) {
+  const response = await page.evaluate((value) => chrome.runtime.sendMessage(value), message);
+  if (!response?.ok) throw new Error(response?.error || 'Extension request failed');
+  return response.value;
+}
+
+async function waitForExtension(page, predicate) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const value = await extensionRequest(page, { type: 'STATUS' });
+    if (predicate(value)) return value;
+    await delay(250);
+  }
+  throw new Error('Timed out waiting for extension runtime state');
+}
+
 async function waitForWorker(child) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (child.exitCode != null) throw new Error(`wrangler dev exited early with ${child.exitCode}`);
@@ -130,25 +168,27 @@ async function waitForWorker(child) {
 }
 
 await mkdir(resolve('.runtime'), { recursive: true });
-const persistence = await mkdtemp(resolve('.runtime', 'wrangler-extension-e2e-'));
+const persistence = remoteMode ? undefined : await mkdtemp(resolve('.runtime', 'wrangler-extension-e2e-'));
 const profile = await mkdtemp(join(tmpdir(), 'pushbridge-extension-linked-'));
 const extensionPath = resolve('apps/chromium-extension/dist');
 const extensionEnv = { ...process.env, PUSHBRIDGE_EXTENSION_API_ORIGIN: origin };
 
-run(npm, [...npmPrefix, 'run', 'worker:build']);
 run(npm, [...npmPrefix, 'run', 'extension:build'], extensionEnv);
-run(npx, [...npxPrefix, '--yes', 'wrangler@4', 'd1', 'migrations', 'apply', 'DB', '--local', '--config', config, '--persist-to', persistence]);
-
-const child = spawn(npx, [...npxPrefix, '--yes', 'wrangler@4', 'dev', '--local', '--config', config, '--persist-to', persistence,
-  '--ip', '127.0.0.1', '--port', '8791', '--var', 'REQUIRE_E2EE:true'], {
-  env: process.env,
-  stdio: ['ignore', 'pipe', 'pipe'],
-  shell: false,
-  detached: !windows,
-  windowsHide: true,
-});
+let child;
+if (!remoteMode) {
+  run(npm, [...npmPrefix, 'run', 'worker:build']);
+  run(npx, [...npxPrefix, '--yes', 'wrangler@4', 'd1', 'migrations', 'apply', 'DB', '--local', '--config', config, '--persist-to', persistence]);
+  child = spawn(npx, [...npxPrefix, '--yes', 'wrangler@4', 'dev', '--local', '--config', config, '--persist-to', persistence,
+    '--ip', '127.0.0.1', '--port', '8791', '--var', 'REQUIRE_E2EE:true'], {
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: false,
+    detached: !windows,
+    windowsHide: true,
+  });
+}
 let logs = '';
-for (const stream of [child.stdout, child.stderr]) {
+for (const stream of child ? [child.stdout, child.stderr] : []) {
   stream.setEncoding('utf8');
   stream.on('data', (chunk) => { logs = `${logs}${chunk}`.slice(-12000); });
 }
@@ -156,9 +196,10 @@ for (const stream of [child.stdout, child.stderr]) {
 let context;
 let auth;
 let extensionDeviceId;
+let uploadedFileId;
 const pushIds = [];
 try {
-  await waitForWorker(child);
+  if (child) await waitForWorker(child);
   const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   const issuerKey = await generateDeviceKeyPair();
   auth = await request('/auth/bootstrap', {
@@ -189,6 +230,11 @@ try {
     headless: true,
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
   });
+  if (remoteMode) {
+    const access = await context.request.get(origin, { headers: accessHeaders });
+    assert.equal(access.status(), 200);
+    assert((await context.cookies(origin)).some((cookie) => cookie.name === 'CF_Authorization'));
+  }
   let worker = context.serviceWorkers()[0];
   worker ??= await context.waitForEvent('serviceworker', { timeout: 15_000 });
   const extensionId = new URL(worker.url()).hostname;
@@ -210,6 +256,7 @@ try {
 
   await options.locator('#sync-key').click();
   await options.locator('#status').filter({ hasText: 'E2EE準備完了' }).waitFor({ timeout: 15_000 });
+  await waitForExtension(options, (value) => value.realtimeConnected === true && typeof value.lastSyncAt === 'string');
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   const noteTitle = `Extension encrypted note ${suffix}`;
@@ -240,7 +287,116 @@ try {
   assert.equal(JSON.stringify(encryptedLink).includes(linkUrl), false);
   assert.deepEqual(await decryptPush(accountKey, encryptedLink), { title: linkTitle, url: linkUrl });
   pushIds.push(encryptedLink.id);
-  console.log('Chromium extension integration E2E passed: device-link, E2EE envelope, encrypted Note/Link, target selection, and peer decryption.');
+
+  const incomingGuid = crypto.randomUUID();
+  const incomingTitle = `Realtime encrypted Note ${suffix}`;
+  const incomingBody = 'realtime payload decrypted only inside extension';
+  const incomingContext = `pushbridge/push/v2/note/${incomingGuid}`;
+  const incomingEnvelope = await seal(
+    accountKey,
+    encoder.encode(JSON.stringify({ title: incomingTitle, body: incomingBody })),
+    1,
+    'pushbridge/content/v2/1',
+    incomingContext,
+  );
+  const incoming = await request('/pushes', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': incomingGuid },
+    body: JSON.stringify({
+      type: 'note',
+      target: { kind: 'device', device_id: extensionDevice.id },
+      client_guid: incomingGuid,
+      payload_version: 2,
+      key_version: incomingEnvelope.key_version,
+      encryption_salt: incomingEnvelope.salt,
+      nonce: incomingEnvelope.nonce,
+      ciphertext: incomingEnvelope.ciphertext,
+    }),
+  }, auth.access_token);
+  pushIds.push(incoming.id);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const notifications = await options.evaluate(() => chrome.notifications.getAll());
+    if (notifications[`pushbridge-push-${incoming.id}`]) break;
+    if (attempt === 79) throw new Error('Realtime notification was not created');
+    await delay(250);
+  }
+  await popup.reload();
+  await popup.locator('#history li').filter({ hasText: incomingTitle }).waitFor({ timeout: 15_000 });
+
+  await extensionRequest(options, { type: 'SET_NOTIFICATIONS', enabled: false });
+  const beforeMutedSync = await extensionRequest(options, { type: 'STATUS' });
+  const mutedGuid = crypto.randomUUID();
+  const mutedTitle = `Muted realtime Note ${suffix}`;
+  const mutedContext = `pushbridge/push/v2/note/${mutedGuid}`;
+  const mutedEnvelope = await seal(
+    accountKey,
+    encoder.encode(JSON.stringify({ title: mutedTitle, body: 'cursor sync still runs while notifications are muted' })),
+    1,
+    'pushbridge/content/v2/1',
+    mutedContext,
+  );
+  const muted = await request('/pushes', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': mutedGuid },
+    body: JSON.stringify({
+      type: 'note',
+      target: { kind: 'device', device_id: extensionDevice.id },
+      client_guid: mutedGuid,
+      payload_version: 2,
+      key_version: mutedEnvelope.key_version,
+      encryption_salt: mutedEnvelope.salt,
+      nonce: mutedEnvelope.nonce,
+      ciphertext: mutedEnvelope.ciphertext,
+    }),
+  }, auth.access_token);
+  pushIds.push(muted.id);
+  await waitForExtension(options, (value) => value.lastSyncAt !== beforeMutedSync.lastSyncAt);
+  const mutedNotifications = await options.evaluate(() => chrome.notifications.getAll());
+  assert.equal(mutedNotifications[`pushbridge-push-${muted.id}`], undefined);
+  await popup.reload();
+  await popup.locator('#history li').filter({ hasText: mutedTitle }).waitFor({ timeout: 15_000 });
+  await extensionRequest(options, { type: 'SET_NOTIFICATIONS', enabled: true });
+
+  const fileName = `extension-private-${suffix}.txt`;
+  const fileMime = 'text/plain';
+  const fileBytes = Buffer.from(`extension private file ${suffix}`, 'utf8');
+  const fileTitle = `Encrypted extension File ${suffix}`;
+  await popup.locator('#file-input').setInputFiles({ name: fileName, mimeType: fileMime, buffer: fileBytes });
+  await popup.locator('#file-title').fill(fileTitle);
+  await popup.locator('#file-ttl').selectOption('86400');
+  await popup.locator('#send-file').click();
+  const encryptedFilePush = await waitForPush(auth.access_token, (item) => item.type === 'file');
+  pushIds.push(encryptedFilePush.id);
+  uploadedFileId = encryptedFilePush.file_id;
+  assert.equal(encryptedFilePush.payload_version, 2);
+  assert.equal(encryptedFilePush.payload, null);
+  assert.equal(JSON.stringify(encryptedFilePush).includes(fileName), false);
+  assert.equal(JSON.stringify(encryptedFilePush).includes(fileTitle), false);
+  const decryptedFileMetadata = await decryptPush(accountKey, encryptedFilePush);
+  assert.equal(decryptedFileMetadata.title, fileTitle);
+  assert.deepEqual(decryptedFileMetadata.file, {
+    name: fileName,
+    mime_type: fileMime,
+    size: fileBytes.byteLength,
+    client_file_id: uploadedFileId,
+    sha256: null,
+    expires_at: decryptedFileMetadata.file.expires_at,
+  });
+  const serverFile = await request(`/files/${encodeURIComponent(uploadedFileId)}`, {}, auth.access_token);
+  assert.equal(serverFile.original_name, 'encrypted.bin');
+  assert.equal(serverFile.content_type, 'application/octet-stream');
+  assert.equal(serverFile.expected_size, fileBytes.byteLength + 53);
+  assert.equal(serverFile.actual_size, fileBytes.byteLength + 53);
+  assert.equal(serverFile.e2ee, true);
+  const downloadTicket = await request(`/files/${encodeURIComponent(uploadedFileId)}/download-ticket`, {
+    method: 'POST',
+  }, auth.access_token);
+  const downloaded = new Uint8Array(await (await fetch(downloadTicket.download_url, {
+    headers: accessHeaders,
+  })).arrayBuffer());
+  assert.equal(Buffer.from(downloaded).indexOf(fileBytes), -1);
+  assert.deepEqual(await decryptFileContainer(accountKey, uploadedFileId, downloaded), new Uint8Array(fileBytes));
+  console.log(`Chromium extension ${remoteMode ? 'remote' : 'local'} E2E passed: device-link, E2EE Note/Link/File, private R2, target selection, one-time WebSocket, cursor sync, notification, and peer decryption.`);
 } catch (error) {
   console.error(logs);
   throw error;
@@ -249,19 +405,22 @@ try {
     for (const pushId of pushIds) {
       await request(`/pushes/${encodeURIComponent(pushId)}`, { method: 'DELETE' }, auth.access_token).catch(() => undefined);
     }
+    if (uploadedFileId) {
+      await request(`/files/${encodeURIComponent(uploadedFileId)}`, { method: 'DELETE' }, auth.access_token).catch(() => undefined);
+    }
   }
   if (auth?.access_token && extensionDeviceId) {
     await request(`/devices/${encodeURIComponent(extensionDeviceId)}`, { method: 'DELETE' }, auth.access_token).catch(() => undefined);
   }
   await context?.close();
-  if (windows && child.pid) {
+  if (windows && child?.pid) {
     spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
-  } else if (child.pid && child.exitCode == null) {
+  } else if (child?.pid && child.exitCode == null) {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill('SIGTERM'); }
   }
   await delay(500);
   await Promise.all([
     rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
-    rm(persistence, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+    ...(persistence ? [rm(persistence, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })] : []),
   ]);
 }

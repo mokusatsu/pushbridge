@@ -35,6 +35,21 @@
         <button id="send-link" type="button">Linkを送信</button>
       </section>
       <section class="card">
+        <h2>File</h2>
+        <label>ファイル<input id="file-input" type="file"></label>
+        <label>タイトル<input id="file-title" maxlength="200"></label>
+        <label>メモ<textarea id="file-body" maxlength="10000"></textarea></label>
+        <label>サーバー保持期間
+          <select id="file-ttl">
+            <option value="86400">1日</option>
+            <option value="604800">7日</option>
+            <option value="2592000" selected>30日</option>
+          </select>
+        </label>
+        <p class="muted">ファイル名、種類、本体を端末内で暗号化します。暗号化後25 MiBまで。</p>
+        <button id="send-file" type="button">Fileを送信</button>
+      </section>
+      <section class="card">
         <div class="row"><h2>最近の履歴</h2><a href="options.html" target="_blank">設定</a></div>
         <ul id="history" class="history"><li>読み込み中…</li></ul>
       </section>

@@ -1,4 +1,5 @@
 import type { Draft } from './shared';
+import { deleteUploadedFile, uploadEncryptedFile, type UploadedEncryptedFile } from './file';
 import { element, errorMessage, message, setStatus } from './ui';
 
 interface Status {
@@ -65,6 +66,47 @@ async function send(draft: Draft): Promise<void> {
   }
 }
 
+async function sendSelectedFile(): Promise<void> {
+  const input = element<HTMLInputElement>('file-input');
+  const file = input.files?.[0];
+  if (!file) {
+    setStatus('送信するファイルを選択してください。', 'error');
+    return;
+  }
+  const button = element<HTMLButtonElement>('send-file');
+  let uploaded: UploadedEncryptedFile | undefined;
+  button.disabled = true;
+  try {
+    uploaded = await uploadEncryptedFile(
+      file,
+      Number(element<HTMLSelectElement>('file-ttl').value),
+      (stage) => setStatus(stage === 'encrypting'
+        ? 'ファイルを端末内で暗号化中…'
+        : stage === 'uploading'
+          ? '暗号文をアップロード中…'
+          : 'アップロードを検証中…'),
+    );
+    setStatus('暗号化したFile Pushを作成中…');
+    await message({
+      type: 'SEND_FILE',
+      file: uploaded,
+      title: element<HTMLInputElement>('file-title').value,
+      body: element<HTMLTextAreaElement>('file-body').value,
+      target: target.value,
+    });
+    input.value = '';
+    element<HTMLInputElement>('file-title').value = '';
+    element<HTMLTextAreaElement>('file-body').value = '';
+    setStatus('ファイルを暗号化して送信しました。', 'success');
+    await refresh();
+  } catch (error) {
+    if (uploaded) await deleteUploadedFile(uploaded.id);
+    setStatus(errorMessage(error), 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 target.addEventListener('change', () => void message({ type: 'SET_TARGET', target: target.value }));
 element<HTMLButtonElement>('refresh').addEventListener('click', () => void refresh().catch((error) => setStatus(errorMessage(error), 'error')));
 element<HTMLButtonElement>('send-tab').addEventListener('click', () => {
@@ -82,5 +124,6 @@ element<HTMLButtonElement>('send-link').addEventListener('click', () => void sen
   title: element<HTMLInputElement>('link-title').value,
   url: element<HTMLInputElement>('link-url').value,
 }));
+element<HTMLButtonElement>('send-file').addEventListener('click', () => void sendSelectedFile());
 
 void refresh().catch((error) => setStatus(errorMessage(error), 'error'));

@@ -22,6 +22,13 @@
         </label>
         <button id="redeem" type="button">この拡張を端末として接続</button>
         <button id="sync-key" class="secondary" type="button">E2EE鍵を再確認</button>
+        <button id="sync-now" class="secondary" type="button">受信内容を今すぐ同期</button>
+        <p class="muted">最終同期: <span id="last-sync">未同期</span></p>
+        <label>
+          <input id="notifications-enabled" type="checkbox" checked>
+          受信したNote／Linkをこの拡張機能で通知する
+        </label>
+        <p class="muted">PWA側でも通知を有効にしている場合は重複するため、通知担当にしない端末ではオフにしてください。</p>
       </section>
       <section class="card">
         <h2>権限</h2>
@@ -30,7 +37,7 @@
           <li><code>contextMenus</code>: ページ、リンク、選択テキスト、画像URLを送る</li>
           <li><code>storage</code>: 端末設定をこのChrome profile内に保存する</li>
           <li><code>notifications</code>: 送信結果を表示する</li>
-          <li><code>alarms</code>: 未着のE2EE envelopeを低頻度で再確認する</li>
+          <li><code>alarms</code>: E2EE envelope、cursor同期、WebSocket再接続を低頻度で再確認する</li>
         </ul>
         <p class="muted"><code>&lt;all_urls&gt;</code>、閲覧履歴、clipboard、常駐content script、remote codeは使用しません。</p>
       </section>

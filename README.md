@@ -10,7 +10,7 @@ Pushbullet型の端末間共有サービスを、まずローカルのWeb/PWAと
 - Cloudflare移行先: Workers、D1、R2、Durable Objects、Static Assets
 - Retention: ファイル本体は最大30日、軽量エイリアスは既定180日。容量逼迫時は本体を早期削除し、受信端末はWeb Push／同期時にIndexedDBへ自動保存
 - 実Cloudflare dev環境: Terraform remote stateでWorker、D1、非公開R2、Durable Object、Turnstile、Cron、Static Assets、Accessを管理。dev D1はmigration 0001〜0011、Phase 8 E2EE/realtime Worker/PWAを適用済み。one-time WebSocket ticket、DO tickle、公開ChromiumのService Worker／IndexedDB／offlineを実測済み
-- Chromium拡張PoC: Manifest V3、最小権限、device-link、E2EE Note/Link、current tab、context menu、端末選択、shortcutを実装。ローカルWrangler＋実Chromiumで暗号化と別端末復号を検証
+- Chromium拡張PoC: Manifest V3、最小権限、device-link、E2EE Note/Link/File、current tab、context menu、端末選択、shortcut、one-time WebSocket、cursor同期、受信通知を実装。ローカルWranglerと公開devの実Chromiumでprivate R2 byteと別端末復号まで検証
 
 ローカル結合では、Bootstrap、端末取得、Noteの冪等送信、カーソル同期、ファイルの直接PUT/GET、`file_ref`状態再同期、Web Push Subscription upsertを検証します。
 
@@ -107,4 +107,4 @@ Phase 7のE2EEはローカルとremote devへ適用済みです。P-256端末鍵
 
 Phase 6のローカル縦切りはPasskey登録／認証、短寿命一回限りchallenge、credential counter、HttpOnly Cookie、厳密なOrigin＋CSRF、session一覧／logout／失効をD1 migration 0008で実装しています。Chromium仮想Authenticatorを使う`npm run cloudflare:local:passkey-e2e`で登録、CSRF保護mutation、logout、再ログインを実測します。実環境のRP IDとoriginはCustom Domain判断まで未設定のため、dev WorkerではPasskey機能をまだ有効化しません。詳細は`docs/PASSKEY_AUTH.md`を参照してください。
 
-Chromium拡張は`apps/chromium-extension`にあります。`npm run extension:check`でbuild、型検査、単体試験、unpacked loadを、`npm run extension:e2e:local`でdevice-link、E2EE鍵配送、暗号化Note/Link、送信先指定、別端末復号を確認できます。権限、手動導入、保存境界、未実装範囲は`apps/chromium-extension/README.md`を参照してください。
+Chromium拡張は`apps/chromium-extension`にあります。`npm run extension:check`でbuild、型検査、単体試験、unpacked loadを、`npm run extension:e2e:local`でdevice-link、E2EE鍵配送、暗号化Note/Link/File、private R2、送信先指定、one-time WebSocket、cursor同期、通知、別端末復号を確認できます。同じ縦切りは`extension:e2e:remote`で公開devにも合格済みです。権限、手動導入、保存境界、未実装範囲は`apps/chromium-extension/README.md`を参照してください。

@@ -7,7 +7,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 360px; background: #0d1420; color: #eef4ff; }
-main { display: grid; gap: 14px; padding: 16px; }
+main { display: grid; gap: 14px; width: 100%; max-width: 720px; margin: 0 auto; padding: 16px; }
 h1 { margin: 0; font-size: 20px; }
 h2 { margin: 0; font-size: 15px; }
 p { margin: 0; }
@@ -23,6 +23,8 @@ input, textarea, select, button {
   font: inherit;
 }
 input, textarea, select { background: #0f1928; color: #eef4ff; }
+input[type="checkbox"] { width: auto; margin: 0; accent-color: #4d86ef; }
+label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
 textarea { min-height: 78px; resize: vertical; }
 button { cursor: pointer; background: #2764d8; color: white; font-weight: 650; }
 button.secondary { background: #24334b; }

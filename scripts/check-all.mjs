@@ -69,6 +69,7 @@ run(process.execPath, ["--check", "infra/cloudflare/scripts/diagnose-terraform-s
 run(process.execPath, ["--check", "scripts/cloudflare-local-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-passkey-e2e.mjs"]);
 run(process.execPath, ["--check", "scripts/chromium-extension-e2e.mjs"]);
+run(process.execPath, ["--check", "scripts/chromium-extension-store-evidence.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-extension-e2e.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-remote-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/update-phase7-openapi.mjs"]);

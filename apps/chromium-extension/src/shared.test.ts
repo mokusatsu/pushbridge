@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
   draftFromContextMenu,
+  decryptFile,
+  encryptFile,
   encryptPushPayload,
   payloadForDraft,
   targetFromValue,
@@ -46,5 +48,17 @@ describe('Chromium extension security boundary', () => {
     expect(envelope.key_version).toBe(1);
     expect(JSON.stringify(envelope)).not.toContain('private title');
     expect(JSON.stringify(envelope)).not.toContain('private body');
+  });
+
+  it('uses the same authenticated PBFE container as the PWA', async () => {
+    let offset = 0;
+    const random = (length: number) => Uint8Array.from({ length }, () => (offset++ % 251) + 1);
+    const key = new Uint8Array(32).fill(9);
+    const plaintext = new TextEncoder().encode('extension private file bytes');
+    const encrypted = await encryptFile(key, 3, 'fil_fixture', plaintext.buffer, random);
+    expect(new TextDecoder().decode(encrypted.slice(0, 4))).toBe('PBFE');
+    expect(encrypted.byteLength).toBe(plaintext.byteLength + 53);
+    expect(new Uint8Array(await decryptFile(key, 'fil_fixture', encrypted))).toEqual(plaintext);
+    await expect(decryptFile(key, 'fil_wrong', encrypted)).rejects.toThrow();
   });
 });

@@ -5,6 +5,10 @@ export interface ExtensionState {
   deviceId?: string;
   defaultTarget?: string;
   linkedAt?: string;
+  syncCursor?: string;
+  syncInitialized?: boolean;
+  notificationsEnabled?: boolean;
+  lastSyncAt?: string;
 }
 
 interface StoredIdentity {
@@ -87,7 +91,16 @@ export async function clearSecrets(): Promise<void> {
 }
 
 export async function getState(): Promise<ExtensionState> {
-  return chrome.storage.local.get(['accessToken', 'deviceId', 'defaultTarget', 'linkedAt']) as Promise<ExtensionState>;
+  return chrome.storage.local.get([
+    'accessToken',
+    'deviceId',
+    'defaultTarget',
+    'linkedAt',
+    'syncCursor',
+    'syncInitialized',
+    'notificationsEnabled',
+    'lastSyncAt',
+  ]) as Promise<ExtensionState>;
 }
 
 export async function patchState(value: Partial<ExtensionState>): Promise<void> {
@@ -95,5 +108,14 @@ export async function patchState(value: Partial<ExtensionState>): Promise<void> 
 }
 
 export async function clearState(): Promise<void> {
-  await chrome.storage.local.remove(['accessToken', 'deviceId', 'defaultTarget', 'linkedAt']);
+  await chrome.storage.local.remove([
+    'accessToken',
+    'deviceId',
+    'defaultTarget',
+    'linkedAt',
+    'syncCursor',
+    'syncInitialized',
+    'notificationsEnabled',
+    'lastSyncAt',
+  ]);
 }

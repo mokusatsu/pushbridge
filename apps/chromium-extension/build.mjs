@@ -41,8 +41,9 @@ await cp(join(root, '..', 'web-pwa', 'public', 'icons', 'icon-192.png'), join(ou
 
 const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
 manifest.host_permissions = [`${parsedApiOrigin.origin}/*`];
+const realtimeOrigin = `${parsedApiOrigin.protocol === 'https:' ? 'wss:' : 'ws:'}//${parsedApiOrigin.host}`;
 manifest.content_security_policy.extension_pages =
-  `script-src 'self'; object-src 'self'; connect-src ${parsedApiOrigin.origin}`;
+  `script-src 'self'; object-src 'self'; connect-src ${parsedApiOrigin.origin} ${realtimeOrigin}`;
 if (JSON.stringify(manifest).includes('<all_urls>')) throw new Error('Extension package must not request <all_urls>.');
 await writeFile(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
