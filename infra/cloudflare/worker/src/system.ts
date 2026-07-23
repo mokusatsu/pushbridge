@@ -16,7 +16,7 @@ export function capabilities(env: Env): Record<string, unknown> {
     api_version: "0.2.0-worker-poc",
     environment_id: env.APP_ENVIRONMENT ?? "cloudflare-worker",
     features: {
-      realtime: false,
+      realtime: Boolean(env.USER_HUB),
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: env.REQUIRE_E2EE === "true",
@@ -36,7 +36,7 @@ export function capabilities(env: Env): Record<string, unknown> {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15_552_000,
       max_devices: 10,
     },
-    transports: { realtime: ["poll"], upload: ["server-ticket"] },
+    transports: { realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"], upload: ["server-ticket"] },
     recommended_poll_interval_seconds: 30,
   };
 }

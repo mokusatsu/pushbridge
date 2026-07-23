@@ -47,6 +47,35 @@ async function waitForWorker(child) {
   throw new Error("wrangler dev did not become ready");
 }
 
+function waitForSocketMessage(socket, predicate, timeoutMs = 5_000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", onMessage);
+      reject(new Error("Timed out waiting for realtime WebSocket message"));
+    }, timeoutMs);
+    const onMessage = (event) => {
+      let value;
+      try { value = JSON.parse(String(event.data)); } catch { return; }
+      if (!predicate(value)) return;
+      clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      resolve(value);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+}
+
+async function openRealtimeSocket(ticket) {
+  const socket = new WebSocket(`${origin.replace(/^http/, "ws")}/realtime`, ["pushbridge.v1", `pushbridge-ticket.${ticket}`]);
+  const connected = waitForSocketMessage(socket, (message) => message.type === "connected");
+  await new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", () => reject(new Error("Realtime WebSocket connection failed")), { once: true });
+  });
+  await connected;
+  return socket;
+}
+
 run(npx, [...npxPrefix, "--yes", "wrangler@4", "d1", "migrations", "apply", "DB", "--local", "--config", config, "--persist-to", persistence]);
 
 const child = spawn(npx, [...npxPrefix, "--yes", "wrangler@4", "dev", "--local", "--config", config, "--persist-to", persistence, "--ip", "127.0.0.1", "--port", String(port)], {
@@ -57,6 +86,7 @@ const child = spawn(npx, [...npxPrefix, "--yes", "wrangler@4", "dev", "--local",
   windowsHide: true,
 });
 let logs = "";
+let realtimeSocket;
 for (const stream of [child.stdout, child.stderr]) {
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => { logs = `${logs}${chunk}`.slice(-12000); });
@@ -73,6 +103,8 @@ try {
   assert(capabilities.response.status === 200 && capabilities.body.features.device_registration, "capabilities failed");
   assert(capabilities.body.features.direct_upload === false, "streaming adapter must not be advertised as direct upload");
   assert(capabilities.body.features.web_push_delivery === false, "Web Push delivery must remain disabled without VAPID secrets");
+  assert(capabilities.body.features.realtime === true, "Durable Object realtime capability is missing");
+  assert(capabilities.body.transports.realtime.includes("websocket"), "WebSocket realtime transport is missing");
   assert(capabilities.body.transports.upload.includes("server-ticket"), "server-ticket upload transport is missing");
   const webPushConfig = await request("/api/v1/web-push-config");
   assert(webPushConfig.response.status === 200 && webPushConfig.body.delivery === false, "Web Push config must report disabled delivery without VAPID secrets");
@@ -95,6 +127,9 @@ try {
   assert(linked.response.status === 201, `device B link failed: ${JSON.stringify(linked.body)}`);
   const tokenB = linked.body.access_token;
   const authB = { authorization: `Bearer ${tokenB}`, "content-type": "application/json" };
+  const realtimeTicket = await request("/api/v1/realtime-ticket", { method: "POST", headers: authB });
+  assert(realtimeTicket.response.status === 201, `realtime ticket failed: ${JSON.stringify(realtimeTicket.body)}`);
+  realtimeSocket = await openRealtimeSocket(realtimeTicket.body.ticket);
 
   const unauthorized = await request("/api/v1/devices");
   assert(unauthorized.response.status === 401, "Bearer authentication was not enforced");
@@ -109,12 +144,15 @@ try {
     client_guid: firstKey,
     payload: { title: "First note", body: "from A" },
   };
+  const firstTickle = waitForSocketMessage(realtimeSocket, (message) => message.type === "sync_required" && message.reason === "push.created");
   const first = await request("/api/v1/pushes", {
     method: "POST",
     headers: { ...authA, "idempotency-key": firstKey },
     body: JSON.stringify(firstBody),
   });
   assert(first.response.status === 201, `first note failed: ${JSON.stringify(first.body)}`);
+  const tickle = await firstTickle;
+  assert(typeof tickle.cursor_hint === "string" && tickle.cursor_hint.includes("."), "realtime tickle did not carry a signed cursor hint");
   const replay = await request("/api/v1/pushes", {
     method: "POST",
     headers: { ...authA, "idempotency-key": firstKey },
@@ -205,11 +243,12 @@ try {
     && String(sw.body).includes("acknowledgeFileDelivery")
     && String(sw.body).includes("failed_retryable"), "Phase 3 Service Worker asset was not served");
 
-  console.log("Cloudflare local smoke passed: D1 migrations, private R2 File API, delivery ledger pending/missed transitions, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker ACK code.");
+  console.log("Cloudflare local smoke passed: D1 migrations, Durable Object one-time WebSocket ticket/tickle, private R2 File API, delivery ledger pending/missed transitions, two devices, Bearer auth, cursor sync, idempotency, PWA assets, SPA fallback, and Service Worker ACK code.");
 } catch (error) {
   console.error(logs);
   throw error;
 } finally {
+  if (realtimeSocket?.readyState < WebSocket.CLOSING) realtimeSocket.close(1000, "smoke complete");
   if (windows && child.pid) {
     spawnSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" });
   } else {

@@ -395,6 +395,6 @@ export const storageUsageSchema = z.object({
 
 export const realtimeTicketSchema = z.object({
   ticket: z.string(),
-  url: z.string().optional(),
-  expires_at: z.string().optional(),
-}).passthrough();
+  url: z.string(),
+  expires_at: z.string(),
+}).strict();

@@ -156,6 +156,7 @@ const origin = (process.env.PUSHBRIDGE_REMOTE_ORIGIN ?? "https://pushbridge-dev.
 const accessClientId = process.env.CF_ACCESS_CLIENT_ID;
 const accessClientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
 const expectWebPush = process.env.PUSHBRIDGE_EXPECT_WEB_PUSH === "true";
+const expectRealtime = process.env.PUSHBRIDGE_EXPECT_REALTIME === "true";
 
 if (Boolean(accessClientId) !== Boolean(accessClientSecret)) {
   throw new Error("Set both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, or neither.");
@@ -185,6 +186,37 @@ function expectStatus(result, status, label) {
   assert(result.response.status === status, `${label} returned HTTP ${result.response.status}`);
 }
 
+function waitForSocketMessage(socket, predicate, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", onMessage);
+      reject(new Error("Timed out waiting for realtime WebSocket message"));
+    }, timeoutMs);
+    const onMessage = (event) => {
+      let value;
+      try { value = JSON.parse(String(event.data)); } catch { return; }
+      if (!predicate(value)) return;
+      clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      resolve(value);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+}
+
+async function openRealtimeSocket(ticket) {
+  const socket = new WebSocket(`${origin.replace(/^http/, "ws")}/realtime`, ["pushbridge.v1", `pushbridge-ticket.${ticket}`]);
+  const connected = waitForSocketMessage(socket, (message) => message.type === "connected");
+  await new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", () => reject(new Error(
+      "Realtime WebSocket connection failed. Cloudflare Access requires this command to run from an allowlisted source IP.",
+    )), { once: true });
+  });
+  await connected;
+  return socket;
+}
+
 const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 let authA;
 let authB;
@@ -195,6 +227,7 @@ let accountKey;
 let deviceAKey;
 let deviceBKey;
 let e2eeEnabled = false;
+let realtimeSocket;
 const createdPushIds = [];
 
 async function pushInput(type, clientGuid, target, payload, referencedFileId) {
@@ -230,6 +263,10 @@ try {
   assert(capabilities.body.features?.device_registration === true, "device registration is unavailable");
   assert(capabilities.body.features?.direct_upload === false, "server-ticket must not be advertised as direct upload");
   assert(capabilities.body.transports?.upload?.includes("server-ticket"), "server-ticket upload transport is unavailable");
+  if (expectRealtime) {
+    assert(capabilities.body.features?.realtime === true, "realtime capability is disabled");
+    assert(capabilities.body.transports?.realtime?.includes("websocket"), "WebSocket realtime transport is unavailable");
+  }
   e2eeEnabled = capabilities.body.features?.e2ee === true;
   if (e2eeEnabled) {
     deviceAKey = await generateDeviceKeyPair();
@@ -268,6 +305,11 @@ try {
   assert(typeof linked.body.access_token === "string", "device B token is missing");
   deviceBId = linked.body.device?.id;
   authB = { authorization: `Bearer ${linked.body.access_token}`, "content-type": "application/json" };
+  if (expectRealtime) {
+    const realtimeTicket = await request("/api/v1/realtime-ticket", { method: "POST", headers: authB });
+    expectStatus(realtimeTicket, 201, "realtime ticket");
+    realtimeSocket = await openRealtimeSocket(realtimeTicket.body.ticket);
+  }
 
   if (e2eeEnabled) {
     const deviceAId = bootstrap.body.device?.id;
@@ -340,6 +382,9 @@ try {
   const firstKey = `note-${suffix}-1`;
   const firstPayload = { title: "Remote smoke note", body: "from device A" };
   const firstBody = await pushInput("note", firstKey, { kind: "all_other_devices" }, firstPayload);
+  const realtimeTickle = realtimeSocket
+    ? waitForSocketMessage(realtimeSocket, (message) => message.type === "sync_required" && message.reason === "push.created")
+    : undefined;
   const first = await request("/api/v1/pushes", {
     method: "POST",
     headers: { ...authA, "idempotency-key": firstKey },
@@ -347,6 +392,10 @@ try {
   });
   expectStatus(first, 201, "first Note");
   createdPushIds.push(first.body.id);
+  if (realtimeTickle) {
+    const tickle = await realtimeTickle;
+    assert(typeof tickle.cursor_hint === "string" && tickle.cursor_hint.includes("."), "realtime tickle did not contain a signed cursor hint");
+  }
 
   const replay = await request("/api/v1/pushes", {
     method: "POST",
@@ -490,8 +539,9 @@ try {
     && String(sw.body).includes("acknowledgeFileDelivery")
     && String(sw.body).includes("failed_retryable"), "Phase 3 Service Worker asset is invalid");
 
-  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", and Web Push subscription CRUD" : ""}.`);
+  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", Web Push subscription CRUD" : ""}${expectRealtime ? ", and one-time Durable Object WebSocket tickle" : ""}.`);
 } finally {
+  if (realtimeSocket?.readyState < WebSocket.CLOSING) realtimeSocket.close(1000, "smoke complete");
   if (authA) {
     if (subscriptionId && authB) {
       await request(`/api/v1/web-push-subscriptions/${encodeURIComponent(subscriptionId)}`, { method: "DELETE", headers: authB }).catch(() => undefined);

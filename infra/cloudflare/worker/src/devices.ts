@@ -3,6 +3,7 @@ import { validDevicePublicKey } from "./device-key";
 import { iso } from "./runtime";
 import { sha256Hex } from "./crypto";
 import type { AuthContext, DeviceRow, Env, Runtime } from "./types";
+import { tickleUser } from "./realtime";
 
 export function deviceOut(row: DeviceRow, currentDeviceId: string): Record<string, unknown> {
   return {
@@ -67,6 +68,7 @@ export async function mutateDevice(request: Request, env: Env, auth: AuthContext
       env.DB.prepare("UPDATE devices SET revoked_at = ?, updated_at = ? WHERE id = ?").bind(now, now, deviceId),
       env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE device_id = ?").bind(now, deviceId),
     ]);
+    await tickleUser(env, auth.user_id, { reason: "device.revoked" });
     return new Response(null, { status: 204, headers: { "x-request-id": requestId } });
   }
   const body = await bodyJson(request, requestId);
@@ -74,5 +76,6 @@ export async function mutateDevice(request: Request, env: Env, auth: AuthContext
   await env.DB.prepare("UPDATE devices SET name_ciphertext = ?, updated_at = ? WHERE id = ?").bind(body.name.trim(), runtime.now(), deviceId).run();
   const updated = await env.DB.prepare("SELECT * FROM devices WHERE id = ?").bind(deviceId).first<DeviceRow>();
   if (!updated) throw new Error("updated device is missing");
+  await tickleUser(env, auth.user_id, { reason: "device.changed" });
   return json(deviceOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }

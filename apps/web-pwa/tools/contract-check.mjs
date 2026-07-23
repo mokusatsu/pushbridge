@@ -72,6 +72,7 @@ for (const path of [
   '/v1/web-push-subscriptions',
   '/mock-storage/uploads/{ticket}',
   '/mock-storage/downloads/{ticket}',
+  '/v1/realtime-ticket',
 ]) {
   assert(document.paths?.[path], `missing path: ${path}`);
 }

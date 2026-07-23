@@ -2687,6 +2687,46 @@
           }
         }
       }
+    },
+    "/v1/realtime-ticket": {
+      "post": {
+        "tags": [
+          "realtime"
+        ],
+        "summary": "Issue a one-time WebSocket ticket when realtime is available",
+        "operationId": "create_realtime_ticket_v1_realtime_ticket_post",
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "One-time ticket issued.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeTicketOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5320,6 +5360,34 @@
             }
           }
         }
+      },
+      "RealtimeTicketOut": {
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Ticket"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "format": "uri-reference",
+            "title": "Url"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ticket",
+          "url",
+          "expires_at"
+        ],
+        "title": "RealtimeTicketOut"
       }
     },
     "securitySchemes": {
@@ -5520,6 +5588,21 @@
       },
       "InsufficientStorage": {
         "description": "Storage pressure prevents accepting the upload.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotImplemented": {
+        "description": "The selected runtime does not provide this capability.",
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/XRequestID"

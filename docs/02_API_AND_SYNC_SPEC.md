@@ -426,10 +426,12 @@ Response:
 ```json
 {
   "ticket": "opaque-one-time-token",
-  "expires_at": 1780000030000,
-  "websocket_url": "wss://push.example.com/ws?ticket=..."
+  "expires_at": "2026-05-27T12:27:10.000Z",
+  "url": "/realtime"
 }
 ```
+
+ブラウザーは`new WebSocket(url, ["pushbridge.v1", "pushbridge-ticket." + ticket])`で接続する。ticketをURL queryへ載せない。サーバーは`pushbridge.v1`を選択して応答する。
 
 Ticket claims:
 
@@ -446,15 +448,16 @@ Ticket claims:
 
 ```json
 {
-  "type": "ready",
-  "protocol": 1,
-  "connection_id": "...",
-  "server_time": 1780000000000
+  "event_version": 1,
+  "event_id": "...",
+  "type": "connected"
 }
 ```
 
 ```json
 {
+  "event_version": 1,
+  "event_id": "...",
   "type": "sync_required",
   "cursor_hint": "opaque...",
   "reason": "push_created"
@@ -478,7 +481,7 @@ Ticket claims:
 ### 8.3 Client events
 
 ```json
-{ "type": "ping", "request_id": "..." }
+{ "type": "ping" }
 ```
 
 書き込みはWebSocketで受け付けずRESTに限定する。将来最適化する場合も認可・冪等性をRESTと共通化する。

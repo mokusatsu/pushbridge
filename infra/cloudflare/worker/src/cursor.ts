@@ -11,9 +11,19 @@ interface CursorPayload {
 }
 
 export async function encodeCursor(time: number, id: string, auth: AuthContext): Promise<string> {
-  const payload: CursorPayload = { v: 1, t: time, i: id, u: auth.user_id, d: auth.device_id };
+  return encodeCursorForDevice(time, id, auth.user_id, auth.device_id, auth.cursor_key);
+}
+
+export async function encodeCursorForDevice(
+  time: number,
+  id: string,
+  userId: string,
+  deviceId: string,
+  cursorKey: string,
+): Promise<string> {
+  const payload: CursorPayload = { v: 1, t: time, i: id, u: userId, d: deviceId };
   const encoded = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
-  return `${encoded}.${base64UrlEncode(await hmac(auth.cursor_key, encoded))}`;
+  return `${encoded}.${base64UrlEncode(await hmac(cursorKey, encoded))}`;
 }
 
 export async function decodeCursor(value: string | null, auth: AuthContext, requestId: string): Promise<{ time: number; id: string } | null> {

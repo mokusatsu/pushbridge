@@ -122,10 +122,10 @@ WHERE id = ? AND user_id = ?;
 
 ## 7. WebSocket
 
-- `/ws`は短寿命ticket必須
+- `/realtime`は短寿命ticket必須
 - ticketは30秒以下、一回限り
 - user/device/protocol/session generationへbinding
-- URL queryに載るため値自体は短寿命・使い捨て
+- URL queryへ載せず、WebSocket subprotocol `pushbridge-ticket.<ticket>`で一度だけ送る
 - originを検証
 - DO内で接続にdevice metadataをattachmentとして保持
 - 1 deviceあたりの同時接続数、1 userあたり上限を設ける
@@ -339,7 +339,7 @@ full authorization header
 WebAuthn attestation objectの無制限dump
 ```
 
-IDは運用上必要なら日次salt付きhashで匿名化する。query string全体をlogしない。特に`/ws?ticket=`を除去する。
+IDは運用上必要なら日次salt付きhashで匿名化する。query string全体をlogしない。WebSocket ticketはURLへ含めず、subprotocol headerも記録しない。
 
 ## 16. Secret rotation
 

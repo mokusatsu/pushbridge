@@ -19,6 +19,7 @@ _ERROR_DESCRIPTIONS: dict[str, str] = {
     "PayloadTooLarge": "File or payload exceeds the configured limit.",
     "UnprocessableContent": "Uploaded bytes fail size, digest, or state verification.",
     "InternalError": "The local mock encountered an unexpected error.",
+    "NotImplemented": "The selected runtime does not provide this capability.",
     "InsufficientStorage": "Storage pressure prevents accepting the upload.",
 }
 

@@ -84,6 +84,8 @@ test('Passkey registration, session rotation, one-time device link, logout, and 
   await sync(page);
   await linkedPage.goto(`${passkeyOrigin}/#/timeline`);
   await sync(linkedPage);
+  await expect(page.getByText('API接続中・リアルタイム')).toBeVisible();
+  await expect(linkedPage.getByText('API接続中・リアルタイム')).toBeVisible();
 
   const noteTitle = `E2EE Note ${Date.now()}`;
   const noteBody = 'plaintext must never reach D1';
@@ -100,7 +102,6 @@ test('Passkey registration, session rotation, one-time device link, logout, and 
   expect(encryptedNote).toMatchObject({ payload_version: 2, payload: null, key_version: 1 });
   expect(JSON.stringify(encryptedNote)).not.toContain(noteTitle);
   expect(JSON.stringify(encryptedNote)).not.toContain(noteBody);
-  await sync(linkedPage);
   await expect(linkedPage.getByRole('heading', { name: noteTitle })).toBeVisible();
 
   const fileName = `phase7-${Date.now()}.txt`;
@@ -117,7 +118,6 @@ test('Passkey registration, session rotation, one-time device link, logout, and 
   const fileId = String(filePush?.file_id);
   const metadata = await context.request.get(`${passkeyOrigin}/api/v1/files/${encodeURIComponent(fileId)}`);
   expect(await metadata.json()).toMatchObject({ original_name: 'encrypted.bin', content_type: 'application/octet-stream', e2ee: true });
-  await sync(linkedPage);
   await expect(linkedPage.getByRole('heading', { name: fileName })).toBeVisible();
   await expect(linkedPage.getByText('この端末に保存済み').first()).toBeVisible();
   const cachedText = await linkedPage.evaluate(async ({ fileId: id }) => {

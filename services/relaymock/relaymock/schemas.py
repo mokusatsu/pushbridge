@@ -424,6 +424,12 @@ class DownloadTicketOut(StrictModel):
     expires_at: datetime
 
 
+class RealtimeTicketOut(StrictModel):
+    ticket: str = Field(min_length=1)
+    url: UriReference
+    expires_at: datetime
+
+
 class SubscriptionIn(StrictModel):
     endpoint: HttpUrl
     p256dh: str = Field(min_length=1, max_length=4096)

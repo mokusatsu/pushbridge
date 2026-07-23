@@ -18,6 +18,16 @@ def test_requires_bearer_token(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "unauthorized"
 
 
+def test_realtime_ticket_is_explicitly_unavailable_in_relaymock(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    capabilities = client.get("/v1/system/capabilities").json()
+    assert capabilities["features"]["realtime"] is False
+    response = client.post("/v1/realtime-ticket", headers=auth_headers)
+    assert response.status_code == 501
+    assert response.json()["detail"]["code"] == "realtime_not_available"
+
+
 def test_storage_usage_requires_auth_and_reports_policy(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
@@ -716,6 +726,11 @@ def test_openapi_matches_runtime_contract(client: TestClient) -> None:
     assert components["schemas"]["ApiError"]["additionalProperties"] is False
     assert "Unauthorized" in components["responses"]
     assert "Gone" in components["responses"]
+    assert "NotImplemented" in components["responses"]
+    realtime = document["paths"]["/v1/realtime-ticket"]["post"]
+    assert realtime["responses"]["201"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/RealtimeTicketOut")
 
     push_post = document["paths"]["/v1/pushes"]["post"]
     assert push_post["responses"]["200"]["headers"]["Idempotent-Replayed"][

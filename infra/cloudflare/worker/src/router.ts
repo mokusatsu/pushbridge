@@ -16,6 +16,7 @@ import {
   rotateBrowserSession,
 } from "./passkeys";
 import { createPush, getPush, listPushes, mutatePush } from "./pushes";
+import { connectRealtime, issueRealtimeTicket } from "./realtime";
 import { getRequestId, json, problem } from "./response";
 import { handleSubscriptionRoute, webPushConfig } from "./subscriptions";
 import { capabilities, retention } from "./system";
@@ -43,6 +44,7 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
           policy: { fileRetention: retention(env) },
         });
       }
+      if (url.pathname === "/realtime") return connectRealtime(request, env, requestId, runtime);
 
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
       const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
@@ -76,6 +78,7 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
       const deviceEnvelopeMatch = path.match(/^\/v1\/e2ee\/device-envelopes\/([^/]+)$/);
       if (deviceEnvelopeMatch && request.method === "PUT") return putDeviceEnvelope(request, env, auth, requestId, decodeURIComponent(deviceEnvelopeMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/device-links") return createDeviceLink(request, env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/realtime-ticket") return issueRealtimeTicket(env, auth, requestId, runtime);
       const deviceLinkMatch = path.match(/^\/v1\/device-links\/([^/]+)$/);
       if (deviceLinkMatch && request.method === "GET") return deviceLinkStatus(env, auth, requestId, decodeURIComponent(deviceLinkMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/devices/link") {

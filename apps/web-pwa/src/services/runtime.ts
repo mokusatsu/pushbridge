@@ -23,6 +23,7 @@ import { formatBytes, safeFilename } from '@/utils/format';
 import { newId } from '@/utils/id';
 import { decodeVapidPublicKey, getActiveServiceWorkerRegistration, subscriptionToInput, webPushSupport } from './webPush';
 import { ensureDeviceIdentity } from './deviceIdentity';
+import { REALTIME_HEARTBEAT_INTERVAL_MS, realtimeReconnectDelayMs } from './realtime';
 import {
   decryptFile,
   decryptPushPayload,
@@ -115,6 +116,7 @@ export class AppRuntime {
   private unsubscribeStorage?: () => void;
   private pollTimer?: number;
   private reconnectTimer?: number;
+  private heartbeatTimer?: number;
   private syncDebounceTimer?: number;
   private websocket?: WebSocket;
   private reconnectAttempts = 0;
@@ -130,6 +132,20 @@ export class AppRuntime {
     this.closeRealtime();
     this.patch({ connection: 'offline', realtimeConnected: false });
     this.schedulePoll();
+  };
+
+  private readonly visibilityHandler = () => {
+    if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+    void this.syncNow(false);
+    if (this.websocket?.readyState === WebSocket.OPEN) {
+      try {
+        this.websocket.send('ping');
+      } catch {
+        this.websocket.close();
+      }
+    } else {
+      void this.ensureRealtime();
+    }
   };
 
   private readonly serviceWorkerMessageHandler = (event: MessageEvent<{ type?: string }>) => {
@@ -157,6 +173,7 @@ export class AppRuntime {
     this.unsubscribeStorage = subscribeDataChanged(() => void this.reloadCached());
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
+    document.addEventListener('visibilitychange', this.visibilityHandler);
     navigator.serviceWorker?.addEventListener('message', this.serviceWorkerMessageHandler);
 
     if (this.settings.authMode === 'cookie' && this.settings.csrfToken) {
@@ -183,9 +200,11 @@ export class AppRuntime {
     this.unsubscribeStorage?.();
     window.removeEventListener('online', this.onlineHandler);
     window.removeEventListener('offline', this.offlineHandler);
+    document.removeEventListener('visibilitychange', this.visibilityHandler);
     navigator.serviceWorker?.removeEventListener('message', this.serviceWorkerMessageHandler);
     if (this.pollTimer) window.clearTimeout(this.pollTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    if (this.heartbeatTimer) window.clearTimeout(this.heartbeatTimer);
     if (this.syncDebounceTimer) window.clearTimeout(this.syncDebounceTimer);
     for (const controller of this.uploadControllers.values()) controller.abort();
     this.uploadControllers.clear();
@@ -912,17 +931,17 @@ export class AppRuntime {
 
     try {
       const ticket = await this.api.createRealtimeTicket();
-      const rawUrl = ticket.url ?? `${this.settings.realtimePath}?ticket=${encodeURIComponent(ticket.ticket)}`;
+      const rawUrl = ticket.url || this.settings.realtimePath;
       const url = new URL(rawUrl, window.location.href);
       if (url.protocol === 'http:') url.protocol = 'ws:';
       if (url.protocol === 'https:') url.protocol = 'wss:';
-      if (!url.searchParams.has('ticket')) url.searchParams.set('ticket', ticket.ticket);
 
-      const socket = new WebSocket(url.toString());
+      const socket = new WebSocket(url.toString(), ['pushbridge.v1', `pushbridge-ticket.${ticket.ticket}`]);
       this.websocket = socket;
       socket.addEventListener('open', () => {
         this.reconnectAttempts = 0;
         this.patch({ realtimeConnected: true, connection: 'online' });
+        this.scheduleHeartbeat();
         this.schedulePoll();
       });
       socket.addEventListener('message', (event) => {
@@ -937,6 +956,8 @@ export class AppRuntime {
       socket.addEventListener('close', () => {
         if (this.websocket === socket) this.websocket = undefined;
         this.patch({ realtimeConnected: false });
+        if (this.heartbeatTimer) window.clearTimeout(this.heartbeatTimer);
+        this.heartbeatTimer = undefined;
         this.scheduleRealtimeReconnect();
         this.schedulePoll();
       });
@@ -957,13 +978,29 @@ export class AppRuntime {
     if (this.destroyed || !navigator.onLine || !this.snapshot.capabilities?.features.realtime) return;
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
     this.reconnectAttempts += 1;
-    const delay = Math.min(60_000, 1_000 * (2 ** Math.min(this.reconnectAttempts, 6)));
+    const delay = realtimeReconnectDelayMs(this.reconnectAttempts);
     this.reconnectTimer = window.setTimeout(() => void this.ensureRealtime(), delay);
+  }
+
+  private scheduleHeartbeat(): void {
+    if (this.heartbeatTimer) window.clearTimeout(this.heartbeatTimer);
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    this.heartbeatTimer = window.setTimeout(() => {
+      if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+      try {
+        this.websocket.send('ping');
+        this.scheduleHeartbeat();
+      } catch {
+        this.websocket.close();
+      }
+    }, REALTIME_HEARTBEAT_INTERVAL_MS);
   }
 
   private closeRealtime(): void {
     const socket = this.websocket;
     this.websocket = undefined;
+    if (this.heartbeatTimer) window.clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'client offline');
   }
 

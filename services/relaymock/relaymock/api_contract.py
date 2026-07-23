@@ -14,6 +14,7 @@ _ERROR_STATUS_TO_COMPONENT: dict[int, str] = {
     413: "PayloadTooLarge",
     422: "UnprocessableContent",
     500: "InternalError",
+    501: "NotImplemented",
     507: "InsufficientStorage",
 }
 

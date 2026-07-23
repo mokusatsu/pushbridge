@@ -7,6 +7,7 @@ import type { Env } from "../src/types";
 import { base64UrlEncode } from "../src/crypto";
 import { sha256Hex } from "../src/crypto";
 import { deliverFilePush } from "../src/web-push";
+import { UserHub } from "../src/user-hub";
 
 interface BootstrapResult {
   user: { id: string };
@@ -51,6 +52,53 @@ function request(path: string, init: RequestInit = {}): Request {
 
 async function call(path: string, init: RequestInit = {}): Promise<Response> {
   return worker.fetch(request(path, init));
+}
+
+function nextWebSocketMessage(socket: WebSocket, timeoutMs = 2_000): Promise<MessageEvent> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", onMessage);
+      reject(new Error("Timed out waiting for WebSocket message"));
+    }, timeoutMs);
+    const onMessage = (event: MessageEvent) => {
+      clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      resolve(event);
+    };
+    socket.addEventListener("message", onMessage);
+  });
+}
+
+function nextWebSocketClose(socket: WebSocket, timeoutMs = 2_000): Promise<CloseEvent> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("close", onClose);
+      reject(new Error("Timed out waiting for WebSocket close"));
+    }, timeoutMs);
+    const onClose = (event: CloseEvent) => {
+      clearTimeout(timeout);
+      socket.removeEventListener("close", onClose);
+      resolve(event);
+    };
+    socket.addEventListener("close", onClose);
+  });
+}
+
+async function issueRealtimeTicket(token: string): Promise<{ ticket: string; expires_at: string }> {
+  const response = await call("/api/v1/realtime-ticket", { method: "POST", headers: auth(token) });
+  expect(response.status).toBe(201);
+  return response.json<{ ticket: string; expires_at: string }>();
+}
+
+async function openRealtime(ticket: string): Promise<{ response: Response; socket?: WebSocket; connected?: Record<string, unknown> }> {
+  const response = await call("/realtime", {
+    headers: { upgrade: "websocket", "sec-websocket-protocol": `pushbridge.v1, pushbridge-ticket.${ticket}` },
+  });
+  const socket = response.webSocket ?? undefined;
+  if (!socket) return { response };
+  const message = nextWebSocketMessage(socket);
+  socket.accept();
+  return { response, socket, connected: JSON.parse(String((await message).data)) as Record<string, unknown> };
 }
 
 async function bootstrap(sourceIp = `198.51.100.${sequence + 1}`): Promise<BootstrapResult> {
@@ -472,7 +520,179 @@ describe("Worker runtime integration", () => {
     expect([...new Uint8Array(await (await env.FILES.get("test/runtime-bindings"))!.arrayBuffer())]).toEqual([1, 2, 3]);
     await env.FILES.delete("test/runtime-bindings");
     const stub = env.USER_HUB.get(env.USER_HUB.idFromName("test"));
-    expect((await stub.fetch("https://user-hub.test/")).status).toBe(501);
+    expect((await stub.fetch("https://user-hub.test/")).status).toBe(404);
+  });
+
+  it("issues a session-bound one-time realtime ticket and sends a signed cursor tickle", async () => {
+    const session = await bootstrap();
+    const issued = await issueRealtimeTicket(session.access_token);
+    expect(Date.parse(issued.expires_at) - Date.now()).toBeLessThanOrEqual(30_000);
+    expect(Date.parse(issued.expires_at)).toBeGreaterThan(Date.now());
+
+    const opened = await openRealtime(issued.ticket);
+    expect(opened.response.status).toBe(101);
+    expect(opened.connected).toEqual(expect.objectContaining({ event_version: 1, type: "connected" }));
+
+    const syncMessage = nextWebSocketMessage(opened.socket!);
+    const created = await createNote(session.access_token);
+    expect(created.status).toBe(201);
+    const sync = JSON.parse(String((await syncMessage).data)) as {
+      type: string;
+      reason: string;
+      cursor_hint?: string;
+    };
+    expect(sync).toEqual(expect.objectContaining({
+      type: "sync_required",
+      reason: "push.created",
+      cursor_hint: expect.stringContaining("."),
+    }));
+
+    const replay = await call("/realtime", {
+      headers: { upgrade: "websocket", "sec-websocket-protocol": `pushbridge.v1, pushbridge-ticket.${issued.ticket}` },
+    });
+    expect(replay.status).toBe(409);
+    expect((await replay.json<{ detail: { code: string } }>()).detail.code).toBe("realtime_ticket_used");
+    opened.socket!.close(1000, "test complete");
+  });
+
+  it("rejects expired tickets and tickets whose session was revoked", async () => {
+    const expiredSession = await bootstrap();
+    const expired = await issueRealtimeTicket(expiredSession.access_token);
+    await env.DB.prepare("UPDATE realtime_tickets SET expires_at = 0 WHERE token_hash = ?")
+      .bind(await sha256Hex(expired.ticket)).run();
+    const expiredResponse = await call("/realtime", {
+      headers: { upgrade: "websocket", "sec-websocket-protocol": `pushbridge.v1, pushbridge-ticket.${expired.ticket}` },
+    });
+    expect(expiredResponse.status).toBe(410);
+
+    const revokedSession = await bootstrap();
+    const revoked = await issueRealtimeTicket(revokedSession.access_token);
+    await env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE device_id = ?")
+      .bind(Date.now(), revokedSession.device.id).run();
+    const revokedResponse = await call("/realtime", {
+      headers: { upgrade: "websocket", "sec-websocket-protocol": `pushbridge.v1, pushbridge-ticket.${revoked.ticket}` },
+    });
+    expect(revokedResponse.status).toBe(401);
+    expect((await revokedResponse.json<{ detail: { code: string } }>()).detail.code).toBe("realtime_session_invalid");
+  });
+
+  it("enforces per-device connection and inbound message limits", async () => {
+    const session = await bootstrap();
+    const first = await openRealtime((await issueRealtimeTicket(session.access_token)).ticket);
+    const second = await openRealtime((await issueRealtimeTicket(session.access_token)).ticket);
+    expect(first.response.status).toBe(101);
+    expect(second.response.status).toBe(101);
+
+    const third = await openRealtime((await issueRealtimeTicket(session.access_token)).ticket);
+    expect(third.response.status).toBe(429);
+
+    const closed = nextWebSocketClose(first.socket!);
+    first.socket!.send("x".repeat(65_537));
+    expect((await closed).code).toBe(1009);
+    second.socket!.close(1000, "test complete");
+  });
+
+  it("isolates realtime fan-out by account", async () => {
+    const accountA = await bootstrap();
+    const accountB = await bootstrap();
+    const socketA = (await openRealtime((await issueRealtimeTicket(accountA.access_token)).ticket)).socket!;
+    const socketB = (await openRealtime((await issueRealtimeTicket(accountB.access_token)).ticket)).socket!;
+    let leaked = false;
+    socketB.addEventListener("message", (event) => {
+      try {
+        if ((JSON.parse(String(event.data)) as { type?: string }).type === "sync_required") leaked = true;
+      } catch { /* Ignore non-JSON protocol frames. */ }
+    });
+    const delivered = nextWebSocketMessage(socketA);
+    expect((await createNote(accountA.access_token)).status).toBe(201);
+    expect(JSON.parse(String((await delivered).data))).toEqual(expect.objectContaining({ type: "sync_required" }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(leaked).toBe(false);
+    socketA.close(1000, "test complete");
+    socketB.close(1000, "test complete");
+  });
+
+  it("closes a backpressured realtime connection before sending another tickle", async () => {
+    const session = await bootstrap();
+    const attachment = {
+      userId: session.user.id,
+      deviceId: session.device.id,
+      sessionTokenHash: await sha256Hex(session.access_token),
+      connectedAt: Date.now(),
+    };
+    let closeCode: number | undefined;
+    let sent = false;
+    const socket = {
+      bufferedAmount: 1_048_577,
+      deserializeAttachment: () => attachment,
+      close: (code: number) => { closeCode = code; },
+      send: () => { sent = true; },
+    };
+    const state = {
+      setWebSocketAutoResponse: () => undefined,
+      getWebSockets: () => [socket],
+    } as unknown as DurableObjectState;
+    const hub = new UserHub(state, env);
+    const response = await hub.fetch(new Request("https://user-hub.internal/tickle", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-pushbridge-user-id": session.user.id },
+      body: JSON.stringify({ reason: "push.created" }),
+    }));
+    expect(response.status).toBe(200);
+    expect(closeCode).toBe(1013);
+    expect(sent).toBe(false);
+  });
+
+  it("disconnects a revoked device without rolling back the D1 mutation", async () => {
+    const owner = await bootstrap();
+    const linkedResponse = await call("/api/v1/devices/link", {
+      method: "POST",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ name: "Realtime peer", kind: "pwa" }),
+    });
+    const linked = await linkedResponse.json<{ device: { id: string }; access_token: string }>();
+    const opened = await openRealtime((await issueRealtimeTicket(linked.access_token)).ticket);
+    const closed = nextWebSocketClose(opened.socket!);
+    const revoked = await call(`/api/v1/devices/${linked.device.id}`, {
+      method: "DELETE",
+      headers: auth(owner.access_token),
+    });
+    expect(revoked.status).toBe(204);
+    expect((await closed).code).toBe(4401);
+    expect((await env.DB.prepare("SELECT revoked_at FROM devices WHERE id = ?")
+      .bind(linked.device.id).first<{ revoked_at: number | null }>())?.revoked_at).not.toBeNull();
+  });
+
+  it("keeps the committed push when the Durable Object tickle fails", async () => {
+    const session = await bootstrap();
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (
+      request: Request<unknown, any>,
+      workerEnv: Env,
+      ctx: ExecutionContext,
+    ) => Promise<Response>;
+    const unavailableHub = {
+      idFromName: (name: string) => env.USER_HUB.idFromName(name),
+      get: () => ({ fetch: async () => { throw new Error("Durable Object unavailable"); } }),
+    } as unknown as DurableObjectNamespace;
+    const clientGuid = unique("do_failure");
+    const response = await fetchHandler(request("/api/v1/pushes", {
+      method: "POST",
+      headers: auth(session.access_token, {
+        "content-type": "application/json",
+        "idempotency-key": clientGuid,
+      }),
+      body: JSON.stringify({
+        type: "note",
+        client_guid: clientGuid,
+        target: { kind: "all_other_devices" },
+        payload_version: 1,
+        payload: { title: "fixture", body: "fixture" },
+      }),
+    }), { ...env, USER_HUB: unavailableHub }, {} as ExecutionContext);
+    expect(response.status).toBe(201);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM pushes WHERE user_id = ? AND client_guid = ?")
+      .bind(session.user.id, clientGuid).first<{ count: number }>())?.count).toBe(1);
   });
 
   it("rejects revoked sessions", async () => {

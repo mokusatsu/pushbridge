@@ -99,7 +99,7 @@ curl -fsS https://<host>/api/bootstrap/status
 期待:
 
 - health/statusは200
-- `/api/nonexistent`と`/ws`はbootstrap中501
+- `/api/nonexistent`は404、ticketなしの`/realtime`は401またはWebSocket upgrade不足426
 - D1/R2/DO/Turnstile bindingがstatusでtrue
 
 ## 4. 本番API切替

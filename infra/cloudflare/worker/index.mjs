@@ -1852,6 +1852,7 @@ async function cleanupMetadata(env, now, report) {
     env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM auth_rate_limits WHERE window_started_at < ?").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM device_links WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
+    env.DB.prepare("DELETE FROM realtime_tickets WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - DAY_MS),
     env.DB.prepare("DELETE FROM file_tickets WHERE expires_at <= ?").bind(now - TICKET_RECORD_TTL_MS),
     env.DB.prepare("DELETE FROM storage_usage_daily WHERE day < ?").bind(utcDay(now - 400 * DAY_MS))
   ];
@@ -1957,6 +1958,113 @@ function validDevicePublicKey(value) {
   return /^p256\.[A-Za-z0-9_-]{87}$/.test(value);
 }
 
+// infra/cloudflare/worker/src/cursor.ts
+async function encodeCursor(time, id, auth) {
+  return encodeCursorForDevice(time, id, auth.user_id, auth.device_id, auth.cursor_key);
+}
+async function encodeCursorForDevice(time, id, userId, deviceId, cursorKey) {
+  const payload = { v: 1, t: time, i: id, u: userId, d: deviceId };
+  const encoded = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  return `${encoded}.${base64UrlEncode(await hmac(cursorKey, encoded))}`;
+}
+async function decodeCursor(value, auth, requestId) {
+  if (!value) return null;
+  try {
+    const [encoded, signature, extra] = value.split(".");
+    if (!encoded || !signature || extra) throw new Error("invalid cursor shape");
+    const expected = base64UrlEncode(await hmac(auth.cursor_key, encoded));
+    if (signature.length !== expected.length) throw new Error("invalid cursor signature");
+    let mismatch = 0;
+    for (let index = 0; index < signature.length; index += 1) mismatch |= signature.charCodeAt(index) ^ expected.charCodeAt(index);
+    if (mismatch !== 0) throw new Error("invalid cursor signature");
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(encoded)));
+    const time = Number(payload.t);
+    if (payload.v !== 1 || !Number.isSafeInteger(time) || typeof payload.i !== "string" || !payload.i || payload.u !== auth.user_id || payload.d !== auth.device_id) throw new Error("invalid cursor payload");
+    return { time, id: payload.i };
+  } catch {
+    throw problem(400, "invalid_cursor", "The cursor is invalid or has been modified.", requestId);
+  }
+}
+
+// infra/cloudflare/worker/src/realtime.ts
+var TICKET_TTL_MS = 3e4;
+async function issueRealtimeTicket(env, auth, requestId, runtime) {
+  const ticket = runtime.token();
+  const now = runtime.now();
+  const expiresAt = now + TICKET_TTL_MS;
+  await env.DB.prepare(`INSERT INTO realtime_tickets
+    (token_hash, user_id, device_id, session_token_hash, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)`).bind(await sha256Hex(ticket), auth.user_id, auth.device_id, auth.session_token_hash, now, expiresAt).run();
+  return json({
+    ticket,
+    url: "/realtime",
+    expires_at: iso(expiresAt)
+  }, { status: 201, headers: { "x-request-id": requestId } });
+}
+async function failedTicketResponse(env, tokenHash, now, requestId) {
+  const ticket = await env.DB.prepare("SELECT expires_at, consumed_at FROM realtime_tickets WHERE token_hash = ?").bind(tokenHash).first();
+  if (!ticket) return problem(401, "invalid_realtime_ticket", "The realtime ticket is invalid.", requestId);
+  if (ticket.consumed_at != null) return problem(409, "realtime_ticket_used", "The realtime ticket was already used.", requestId);
+  if (Number(ticket.expires_at) <= now) return problem(410, "realtime_ticket_expired", "The realtime ticket has expired.", requestId);
+  return problem(401, "realtime_session_invalid", "The session or device bound to this ticket is no longer active.", requestId);
+}
+async function connectRealtime(request, env, requestId, runtime) {
+  if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return problem(426, "websocket_upgrade_required", "A WebSocket upgrade request is required.", requestId, { upgrade: "websocket" });
+  }
+  const ticketProtocols = (request.headers.get("sec-websocket-protocol") ?? "").split(",").map((value) => value.trim()).filter((value) => value.startsWith("pushbridge-ticket."));
+  const ticket = ticketProtocols.length === 1 ? ticketProtocols[0].slice("pushbridge-ticket.".length) : null;
+  if (!ticket || ticket.length > 512) return problem(401, "invalid_realtime_ticket", "The realtime ticket is invalid.", requestId);
+  const tokenHash = await sha256Hex(ticket);
+  const now = runtime.now();
+  const row = await env.DB.prepare(`UPDATE realtime_tickets SET consumed_at = ?
+    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+      AND EXISTS (
+        SELECT 1 FROM sessions s
+        JOIN devices d ON d.id = s.device_id
+        JOIN users u ON u.id = s.user_id
+        WHERE s.token_hash = realtime_tickets.session_token_hash
+          AND s.user_id = realtime_tickets.user_id
+          AND s.device_id = realtime_tickets.device_id
+          AND s.revoked_at IS NULL AND s.expires_at > ?
+          AND (s.absolute_expires_at IS NULL OR s.absolute_expires_at > ?)
+          AND d.revoked_at IS NULL AND u.deleted_at IS NULL
+      )
+    RETURNING user_id, device_id, session_token_hash`).bind(now, tokenHash, now, now, now).first();
+  if (!row) return failedTicketResponse(env, tokenHash, now, requestId);
+  const stub = env.USER_HUB.get(env.USER_HUB.idFromName(row.user_id));
+  const headers = new Headers({
+    upgrade: "websocket",
+    "sec-websocket-protocol": "pushbridge.v1",
+    "x-pushbridge-user-id": row.user_id,
+    "x-pushbridge-device-id": row.device_id,
+    "x-pushbridge-session-hash": row.session_token_hash
+  });
+  return stub.fetch(new Request("https://user-hub.internal/connect", { headers }));
+}
+async function tickleUser(env, userId, input) {
+  try {
+    const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
+    await stub.fetch(new Request("https://user-hub.internal/tickle", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-pushbridge-user-id": userId
+      },
+      body: JSON.stringify({
+        reason: input.reason,
+        ...input.entityId ? { entity_id: input.entityId } : {},
+        ...input.modifiedAt == null ? {} : { modified_at: input.modifiedAt }
+      })
+    }));
+  } catch {
+  }
+}
+async function cursorHint(env, userId, deviceId, time, entityId) {
+  const row = await env.DB.prepare("SELECT cursor_secret FROM devices WHERE id = ? AND user_id = ?").bind(deviceId, userId).first();
+  return row?.cursor_secret ? encodeCursorForDevice(time, entityId, userId, deviceId, row.cursor_secret) : void 0;
+}
+
 // infra/cloudflare/worker/src/devices.ts
 function deviceOut(row, currentDeviceId) {
   return {
@@ -2015,6 +2123,7 @@ async function mutateDevice(request, env, auth, requestId, deviceId, runtime) {
       env.DB.prepare("UPDATE devices SET revoked_at = ?, updated_at = ? WHERE id = ?").bind(now, now, deviceId),
       env.DB.prepare("UPDATE sessions SET revoked_at = ? WHERE device_id = ?").bind(now, deviceId)
     ]);
+    await tickleUser(env, auth.user_id, { reason: "device.revoked" });
     return new Response(null, { status: 204, headers: { "x-request-id": requestId } });
   }
   const body = await bodyJson(request, requestId);
@@ -2022,6 +2131,7 @@ async function mutateDevice(request, env, auth, requestId, deviceId, runtime) {
   await env.DB.prepare("UPDATE devices SET name_ciphertext = ?, updated_at = ? WHERE id = ?").bind(body.name.trim(), runtime.now(), deviceId).run();
   const updated = await env.DB.prepare("SELECT * FROM devices WHERE id = ?").bind(deviceId).first();
   if (!updated) throw new Error("updated device is missing");
+  await tickleUser(env, auth.user_id, { reason: "device.changed" });
   return json(deviceOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }
 
@@ -19466,31 +19576,6 @@ async function revokeBrowserSession(sessionId, env, auth, requestId, runtime) {
   return result.meta.changes === 1 ? new Response(null, { status: 204, headers: { "x-request-id": requestId } }) : problem(404, "session_not_found", "Session not found.", requestId);
 }
 
-// infra/cloudflare/worker/src/cursor.ts
-async function encodeCursor(time, id, auth) {
-  const payload = { v: 1, t: time, i: id, u: auth.user_id, d: auth.device_id };
-  const encoded = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)));
-  return `${encoded}.${base64UrlEncode(await hmac(auth.cursor_key, encoded))}`;
-}
-async function decodeCursor(value, auth, requestId) {
-  if (!value) return null;
-  try {
-    const [encoded, signature, extra] = value.split(".");
-    if (!encoded || !signature || extra) throw new Error("invalid cursor shape");
-    const expected = base64UrlEncode(await hmac(auth.cursor_key, encoded));
-    if (signature.length !== expected.length) throw new Error("invalid cursor signature");
-    let mismatch = 0;
-    for (let index = 0; index < signature.length; index += 1) mismatch |= signature.charCodeAt(index) ^ expected.charCodeAt(index);
-    if (mismatch !== 0) throw new Error("invalid cursor signature");
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(encoded)));
-    const time = Number(payload.t);
-    if (payload.v !== 1 || !Number.isSafeInteger(time) || typeof payload.i !== "string" || !payload.i || payload.u !== auth.user_id || payload.d !== auth.device_id) throw new Error("invalid cursor payload");
-    return { time, id: payload.i };
-  } catch {
-    throw problem(400, "invalid_cursor", "The cursor is invalid or has been modified.", requestId);
-  }
-}
-
 // infra/cloudflare/worker/src/web-push.ts
 var encoder2 = new TextEncoder();
 var MAX_WEB_PUSH_PLAINTEXT_BYTES = 3993;
@@ -19870,6 +19955,7 @@ async function createPush(request, env, auth, requestId, runtime) {
   if (!row) throw new Error("created push is missing");
   await ensureFileDeliveries(env, row, runtime);
   await deliverFilePush(env, row.id, new URL(request.url).origin, runtime);
+  await tickleUser(env, auth.user_id, { entityId: row.id, modifiedAt: Number(row.modified_at), reason: "push.created" });
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
 async function listPushes(url, env, auth, requestId) {
@@ -19906,6 +19992,7 @@ async function mutatePush(request, env, auth, requestId, pushId, runtime) {
   }
   const updated = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first();
   if (!updated) throw new Error("updated push is missing");
+  await tickleUser(env, auth.user_id, { entityId: updated.id, modifiedAt: Number(updated.modified_at), reason: "push.changed" });
   return json(pushOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }
 
@@ -20062,7 +20149,7 @@ function capabilities(env) {
     api_version: "0.2.0-worker-poc",
     environment_id: env.APP_ENVIRONMENT ?? "cloudflare-worker",
     features: {
-      realtime: false,
+      realtime: Boolean(env.USER_HUB),
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: env.REQUIRE_E2EE === "true",
@@ -20082,7 +20169,7 @@ function capabilities(env) {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15552e3,
       max_devices: 10
     },
-    transports: { realtime: ["poll"], upload: ["server-ticket"] },
+    transports: { realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"], upload: ["server-ticket"] },
     recommended_poll_interval_seconds: 30
   };
 }
@@ -20110,6 +20197,7 @@ function createRouter(runtime) {
           policy: { fileRetention: retention(env) }
         });
       }
+      if (url.pathname === "/realtime") return connectRealtime(request, env, requestId, runtime);
       const path = url.pathname.replace(/^\/api\/v1/, "/v1");
       const publicFileResponse = await handlePublicFileRoute(request, env, requestId, url.pathname, runtime);
       if (publicFileResponse) return publicFileResponse;
@@ -20141,6 +20229,7 @@ function createRouter(runtime) {
       const deviceEnvelopeMatch = path.match(/^\/v1\/e2ee\/device-envelopes\/([^/]+)$/);
       if (deviceEnvelopeMatch && request.method === "PUT") return putDeviceEnvelope(request, env, auth, requestId, decodeURIComponent(deviceEnvelopeMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/device-links") return createDeviceLink(request, env, auth, requestId, runtime);
+      if (request.method === "POST" && path === "/v1/realtime-ticket") return issueRealtimeTicket(env, auth, requestId, runtime);
       const deviceLinkMatch = path.match(/^\/v1\/device-links\/([^/]+)$/);
       if (deviceLinkMatch && request.method === "GET") return deviceLinkStatus(env, auth, requestId, decodeURIComponent(deviceLinkMatch[1]), runtime);
       if (request.method === "POST" && path === "/v1/devices/link") {
@@ -20174,17 +20263,129 @@ function createRouter(runtime) {
 }
 
 // infra/cloudflare/worker/src/user-hub.ts
+var MAX_ACCOUNT_CONNECTIONS = 10;
+var MAX_DEVICE_CONNECTIONS = 2;
+var MAX_MESSAGE_BYTES = 65536;
+var MAX_BUFFERED_BYTES = 1048576;
 var UserHub = class {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    void this.state;
-    void this.env;
+    this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
   state;
   env;
-  async fetch() {
-    return json({ error: "not_implemented" }, { status: 501 });
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/connect") return this.connect(request);
+    if (request.method === "POST" && url.pathname === "/tickle") return this.tickle(request);
+    return problem(404, "not_found", "UserHub endpoint not found.", crypto.randomUUID());
+  }
+  async active(attachment) {
+    return this.env.DB.prepare(`SELECT d.cursor_secret FROM sessions s
+      JOIN devices d ON d.id = s.device_id
+      JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND s.user_id = ? AND s.device_id = ?
+        AND s.revoked_at IS NULL AND s.expires_at > ?
+        AND (s.absolute_expires_at IS NULL OR s.absolute_expires_at > ?)
+        AND d.revoked_at IS NULL AND u.deleted_at IS NULL`).bind(attachment.sessionTokenHash, attachment.userId, attachment.deviceId, Date.now(), Date.now()).first();
+  }
+  async connect(request) {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return problem(426, "websocket_upgrade_required", "A WebSocket upgrade request is required.", crypto.randomUUID(), { upgrade: "websocket" });
+    }
+    const userId = request.headers.get("x-pushbridge-user-id");
+    const deviceId = request.headers.get("x-pushbridge-device-id");
+    const sessionTokenHash = request.headers.get("x-pushbridge-session-hash");
+    if (!userId || !deviceId || !sessionTokenHash) {
+      return problem(401, "invalid_realtime_context", "Realtime connection metadata is invalid.", crypto.randomUUID());
+    }
+    const attachment = { userId, deviceId, sessionTokenHash, connectedAt: Date.now() };
+    if (!await this.active(attachment)) {
+      return problem(401, "realtime_session_invalid", "The realtime session is no longer active.", crypto.randomUUID());
+    }
+    if (this.state.getWebSockets().length >= MAX_ACCOUNT_CONNECTIONS) {
+      return problem(429, "realtime_account_limit", "The account realtime connection limit was reached.", crypto.randomUUID(), { "retry-after": "30" });
+    }
+    if (this.state.getWebSockets(`device:${deviceId}`).length >= MAX_DEVICE_CONNECTIONS) {
+      return problem(429, "realtime_device_limit", "The device realtime connection limit was reached.", crypto.randomUUID(), { "retry-after": "30" });
+    }
+    const [client, server] = Object.values(new WebSocketPair());
+    this.state.acceptWebSocket(server, [`device:${deviceId}`]);
+    server.serializeAttachment(attachment);
+    server.send(JSON.stringify({
+      event_version: 1,
+      event_id: crypto.randomUUID(),
+      type: "connected"
+    }));
+    return new Response(null, {
+      status: 101,
+      headers: { "sec-websocket-protocol": "pushbridge.v1" },
+      webSocket: client
+    });
+  }
+  async tickle(request) {
+    const userId = request.headers.get("x-pushbridge-user-id");
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ accepted: false }, { status: 400 });
+    }
+    if (!userId || typeof body.reason !== "string") return json({ accepted: false }, { status: 400 });
+    let sent = 0;
+    let disconnected = 0;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment();
+      if (!attachment || attachment.userId !== userId || !await this.active(attachment)) {
+        socket.close(4401, "session revoked");
+        disconnected += 1;
+        continue;
+      }
+      if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+        socket.close(1013, "backpressure");
+        disconnected += 1;
+        continue;
+      }
+      const modifiedAt = typeof body.modified_at === "number" && Number.isSafeInteger(body.modified_at) ? body.modified_at : void 0;
+      const entityId = typeof body.entity_id === "string" ? body.entity_id : void 0;
+      const hint = modifiedAt != null && entityId ? await cursorHint(this.env, userId, attachment.deviceId, modifiedAt, entityId) : void 0;
+      socket.send(JSON.stringify({
+        event_version: 1,
+        event_id: crypto.randomUUID(),
+        type: "sync_required",
+        reason: body.reason,
+        ...hint ? { cursor_hint: hint } : {}
+      }));
+      sent += 1;
+    }
+    return json({ accepted: true, sent, disconnected });
+  }
+  async webSocketMessage(socket, message) {
+    const length = typeof message === "string" ? new TextEncoder().encode(message).byteLength : message.byteLength;
+    if (length > MAX_MESSAGE_BYTES) {
+      socket.close(1009, "message too large");
+      return;
+    }
+    const attachment = socket.deserializeAttachment();
+    if (!attachment || !await this.active(attachment)) {
+      socket.close(4401, "session revoked");
+      return;
+    }
+    if (typeof message !== "string") {
+      socket.close(1003, "text messages only");
+      return;
+    }
+    try {
+      const value = JSON.parse(message);
+      if (value.type !== "ping") throw new Error("unsupported");
+      socket.send(JSON.stringify({ event_version: 1, event_id: crypto.randomUUID(), type: "ping" }));
+    } catch {
+      socket.close(1003, "unsupported message");
+    }
+  }
+  webSocketClose(socket, code, reason) {
+    socket.close(code, reason);
   }
 };
 

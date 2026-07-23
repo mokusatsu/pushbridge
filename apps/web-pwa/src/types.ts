@@ -278,8 +278,8 @@ export interface ChangesResponse {
 
 export interface RealtimeTicket {
   ticket: string;
-  url?: string;
-  expires_at?: string;
+  url: string;
+  expires_at: string;
 }
 
 export interface RealtimeEnvelope {

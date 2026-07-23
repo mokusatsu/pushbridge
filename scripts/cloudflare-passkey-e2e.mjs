@@ -56,6 +56,7 @@ try {
   run(npm, [...npmPrefix, "run", "cloudflare:remote:smoke"], {
     ...process.env,
     PUSHBRIDGE_REMOTE_ORIGIN: origin,
+    PUSHBRIDGE_EXPECT_REALTIME: "true",
   });
 } catch (error) {
   console.error(logs);

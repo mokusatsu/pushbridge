@@ -4,6 +4,7 @@ import { bodyJson, json, problem } from "./response";
 import { iso } from "./runtime";
 import type { AuthContext, Env, PushRow, Runtime } from "./types";
 import { deliverFilePush } from "./web-push";
+import { tickleUser } from "./realtime";
 
 const encoder = new TextEncoder();
 const PUSH_SELECT = `SELECT
@@ -153,6 +154,7 @@ export async function createPush(request: Request, env: Env, auth: AuthContext, 
   if (!row) throw new Error("created push is missing");
   await ensureFileDeliveries(env, row, runtime);
   await deliverFilePush(env, row.id, new URL(request.url).origin, runtime);
+  await tickleUser(env, auth.user_id, { entityId: row.id, modifiedAt: Number(row.modified_at), reason: "push.created" });
   return json(pushOut(row, auth.device_id), { status: 201, headers: { "x-request-id": requestId } });
 }
 
@@ -197,5 +199,6 @@ export async function mutatePush(request: Request, env: Env, auth: AuthContext, 
   }
   const updated = await env.DB.prepare(`${PUSH_SELECT} WHERE p.id = ?`).bind(pushId).first<PushRow>();
   if (!updated) throw new Error("updated push is missing");
+  await tickleUser(env, auth.user_id, { entityId: updated.id, modifiedAt: Number(updated.modified_at), reason: "push.changed" });
   return json(pushOut(updated, auth.device_id), { headers: { "x-request-id": requestId } });
 }

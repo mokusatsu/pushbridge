@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from math import ceil
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import AuthContext, get_auth_context, get_database, get_settings
+from ..api_contract import error_responses
 from ..config import Settings
 from ..database import Database
 from ..schemas import (
@@ -13,6 +14,7 @@ from ..schemas import (
     CapabilityTransports,
     SystemCapabilitiesOut,
     StorageUsageOut,
+    RealtimeTicketOut,
     WebPushConfigOut,
 )
 
@@ -76,6 +78,27 @@ def get_web_push_config(
         subscription_registration=settings.web_push_subscription_registration,
         delivery=settings.web_push_delivery,
         vapid_public_key=settings.vapid_public_key,
+    )
+
+
+@router.post(
+    "/v1/realtime-ticket",
+    response_model=RealtimeTicketOut,
+    status_code=201,
+    responses=error_responses(401, 501),
+    tags=["realtime"],
+    summary="Issue a one-time WebSocket ticket when realtime is available",
+)
+def create_realtime_ticket(
+    auth: AuthContext = Depends(get_auth_context),
+) -> RealtimeTicketOut:
+    del auth
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "realtime_not_available",
+            "message": "RelayMock uses REST cursor polling and does not host WebSockets.",
+        },
     )
 
 

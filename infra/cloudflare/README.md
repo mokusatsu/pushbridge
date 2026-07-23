@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelopeを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0010とPhase 7 Worker/PWAを適用済みで、E2EEを必須化しています。専用R2資格情報によるpresigned URL、WebSocket realtime、Custom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelope、Durable Object WebSocket tickleを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0010とPhase 7 Worker/PWAを適用済みで、E2EEを必須化しています。Phase 8 realtimeはlocal検証済みで、migration 0011とWorkerのdev適用待ちです。専用R2資格情報によるpresigned URLとCustom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 
@@ -22,7 +22,7 @@ Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTe
 ├── infra/                  Terraform
 ├── worker/
 │   ├── index.mjs           安全なブートストラップWorker
-│   └── migrations/         D1 SQL migrations（0004 File〜0010 E2EE）
+│   └── migrations/         D1 SQL migrations（0004 File〜0011 Realtime）
 ├── app/
 │   ├── dist/               Workers Static Assets
 │   └── headers.conf        静的配信のセキュリティヘッダー
@@ -280,7 +280,7 @@ migrations = {
 9. アカウント・端末・IP単位のレート制限
 10. Web Push subscriptionの暗号化保存
 
-ブートストラップWorkerの`UserHub`はWebSocket Hibernation APIの殻だけを定義しています。メインWorkerの`/ws`は意図的にDOへルーティングしません。
+`UserHub`はWebSocket Hibernation APIを使用します。認証済み`POST /api/v1/realtime-ticket`が30秒・一回限り・session/device束縛ticketを発行し、ブラウザーはticketをURL queryへ入れず`pushbridge-ticket.<ticket>` subprotocolで`/realtime`へ接続します。D1 commit後の`sync_required`は同期のきっかけだけで、正本と欠落回復はREST cursor同期です。
 
 ## R2 presigned URLの資格情報
 
