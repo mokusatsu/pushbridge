@@ -53,6 +53,10 @@ try {
     ...process.env,
     PUSHBRIDGE_PASSKEY_ORIGIN: origin,
   });
+  run(npm, [...npmPrefix, "run", "cloudflare:remote:smoke"], {
+    ...process.env,
+    PUSHBRIDGE_REMOTE_ORIGIN: origin,
+  });
 } catch (error) {
   console.error(logs);
   throw error;
