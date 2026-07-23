@@ -29,6 +29,7 @@
 | Phase 7 Terraform | 0 add / 1 change / 0 destroy / 0 replaceでWorkerだけをin-place更新。適用後Planは差分なし |
 | Phase 8 local | migration 0011、30秒one-time ticket、URL非露出subprotocol、DO Hibernation tickle、signed cursor、revocation、接続/size/backpressure制限をWorker 33件とlocal Wrangler/Chromiumで確認 |
 | Phase 8 dev | migration 0011とWorkerを0 add / 1 change / 0 destroyで適用。E2EE/realtime/Web Push capabilityはtrue、Service Auth remote smokeで暗号化Note/FileとDO tickle、公開ChromiumでService Worker／IndexedDB／server削除後Blob／offline reloadに合格。適用後Planは差分なし |
+| Phase 9 Chromium拡張 local | Manifest V3、最小権限、device-link、P-256端末鍵、E2EE Note/Link、current tab/context menu/端末選択/shortcutを実装。実Chromium loadと専用Wrangler/D1で暗号文非漏洩・別端末復号を確認。実Web Pushは一時profileのPushManager permission deniedにより未確認 |
 
 2026-07-22の現実行環境はallowlist外であり、通常アクセスは302で保護される。Accessを無効化せず、対象Service TokenだけをTerraform管理の`non_identity`ポリシーで許可し、公開WorkerのPhase 2縦切りを完了した。テストFile/R2/Push/端末Bはsmoke終了時に回収し、残ったfixtureユーザーも直近候補1件に限定してD1からcascade回収、残存0件を確認した。
 

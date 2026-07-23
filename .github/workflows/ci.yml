@@ -38,15 +38,17 @@ jobs:
           npm ci --prefix apps/web-pwa
       - name: Initialize Terraform providers without backend
         run: terraform -chdir=infra/cloudflare/infra init -backend=false
+      - name: Install Playwright Chromium
+        run: npm run --prefix apps/web-pwa test:e2e:install
       - name: Contract, unit, PWA build, and Terraform checks
         run: npm run check
       - name: Full-stack HTTP smoke test
         run: make smoke
       - name: Local Cloudflare Worker and PWA smoke test
         run: npm run cloudflare:local:smoke
-      - name: Install Playwright Chromium
-        run: npm run --prefix apps/web-pwa test:e2e:install
       - name: Browser PWA end-to-end test
         run: npm run --prefix apps/web-pwa test:e2e
       - name: Browser Passkey and cookie-session end-to-end test
         run: npm run cloudflare:local:passkey-e2e
+      - name: Chromium extension local integration test
+        run: npm run extension:e2e:local

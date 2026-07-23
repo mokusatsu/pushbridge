@@ -55,6 +55,7 @@ run(python, ["-m", "pytest", "services/relaymock"], {
 });
 run(npm, [...npmPrefix, "--prefix", "apps/web-pwa", "run", "check"]);
 run(npm, [...npmPrefix, "run", "worker:check"]);
+run(npm, [...npmPrefix, "run", "extension:check"]);
 const terraformFiles = readdirSync(join(process.cwd(), "infra", "cloudflare", "infra"))
   .filter((name) => name.endsWith(".tf") && name !== "backend.tf")
   .sort();
@@ -67,12 +68,16 @@ run(process.execPath, ["--check", "infra/cloudflare/scripts/render-web-push-tfva
 run(process.execPath, ["--check", "infra/cloudflare/scripts/diagnose-terraform-state.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-local-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-passkey-e2e.mjs"]);
+run(process.execPath, ["--check", "scripts/chromium-extension-e2e.mjs"]);
+run(process.execPath, ["--check", "scripts/cloudflare-extension-e2e.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-remote-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/update-phase7-openapi.mjs"]);
 run(process.execPath, ["--check", "scripts/update-phase8-openapi.mjs"]);
 run(process.execPath, ["--check", "apps/web-pwa/tools/e2e-relaymock.mjs"]);
 run(process.execPath, ["--check", "apps/web-pwa/tools/generate-browser-evidence.mjs"]);
 run(process.execPath, ["--check", "apps/web-pwa/tools/check-browser-evidence.mjs"]);
+run(process.execPath, ["--check", "apps/chromium-extension/build.mjs"]);
+run(process.execPath, ["--check", "apps/chromium-extension/package.mjs"]);
 run(npm, [...npmPrefix, "--prefix", "apps/web-pwa", "run", "test:e2e", "--", "--list"]);
 
 console.log("All repository checks passed.");

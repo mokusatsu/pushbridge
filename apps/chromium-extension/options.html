@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Pushbridge拡張設定</title>
+    <link rel="stylesheet" href="extension.css">
+  </head>
+  <body>
+    <main>
+      <div>
+        <h1>Pushbridge拡張設定</h1>
+        <p class="muted">接続先は権限を限定したdev originに固定されています。</p>
+      </div>
+      <div id="status" class="status">状態を確認中…</div>
+      <section class="card">
+        <h2>接続</h2>
+        <p>API: <code id="origin"></code></p>
+        <p class="muted">PWAの端末設定で「拡張機能」用リンクを発行し、10分以内にtokenを入力してください。</p>
+        <label>一回限りdevice-link token
+          <input id="link-token" type="password" autocomplete="off">
+        </label>
+        <button id="redeem" type="button">この拡張を端末として接続</button>
+        <button id="sync-key" class="secondary" type="button">E2EE鍵を再確認</button>
+      </section>
+      <section class="card">
+        <h2>権限</h2>
+        <ul class="muted">
+          <li><code>activeTab</code>: ボタン操作時だけ現在ページのURLとタイトルを読む</li>
+          <li><code>contextMenus</code>: ページ、リンク、選択テキスト、画像URLを送る</li>
+          <li><code>storage</code>: 端末設定をこのChrome profile内に保存する</li>
+          <li><code>notifications</code>: 送信結果を表示する</li>
+          <li><code>alarms</code>: 未着のE2EE envelopeを低頻度で再確認する</li>
+        </ul>
+        <p class="muted"><code>&lt;all_urls&gt;</code>、閲覧履歴、clipboard、常駐content script、remote codeは使用しません。</p>
+      </section>
+      <section class="card">
+        <p class="muted">ここではこのChrome profile内のtokenと鍵だけを削除します。サーバー側の端末解除は、別の接続済み端末の端末管理から行ってください。</p>
+        <button id="disconnect" class="danger" type="button">ローカル接続情報を削除</button>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
