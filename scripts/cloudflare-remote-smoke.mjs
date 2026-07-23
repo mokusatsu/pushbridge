@@ -560,7 +560,19 @@ try {
     && String(sw.body).includes("acknowledgeFileDelivery")
     && String(sw.body).includes("failed_retryable"), "Phase 3 Service Worker asset is invalid");
 
-  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", Web Push subscription CRUD" : ""}${expectRealtime ? ", and one-time Durable Object WebSocket tickle" : ""}.`);
+  const accountDeletion = await request("/api/v1/account", {
+    method: "DELETE",
+    headers: authA,
+    body: JSON.stringify({ confirmation: "DELETE" }),
+  });
+  expectStatus(accountDeletion, 202, "account deletion");
+  assert(accountDeletion.body.deletion?.state === "completed", "account deletion did not complete");
+  expectStatus(await request("/api/v1/devices", { headers: authA }), 401, "revoked device A token");
+  expectStatus(await request("/api/v1/devices", { headers: authB }), 401, "revoked device B token");
+  authA = undefined;
+  authB = undefined;
+
+  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code, completed account erasure, and both device tokens revoked${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", Web Push subscription CRUD" : ""}${expectRealtime ? ", and one-time Durable Object WebSocket tickle" : ""}.`);
 } finally {
   if (realtimeSocket?.readyState < WebSocket.CLOSING) realtimeSocket.close(1000, "smoke complete");
   if (authA) {

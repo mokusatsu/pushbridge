@@ -9,7 +9,7 @@ Pushbullet型の端末間共有サービスを、まずローカルのWeb/PWAと
 - API正本: `contract/openapi.json`
 - Cloudflare移行先: Workers、D1、R2、Durable Objects、Static Assets
 - Retention: ファイル本体は最大30日、軽量エイリアスは既定180日。容量逼迫時は本体を早期削除し、受信端末はWeb Push／同期時にIndexedDBへ自動保存
-- 実Cloudflare dev環境: Terraform remote stateでWorker、D1、非公開R2、Durable Object、Turnstile、Cron、Static Assets、Accessを管理。dev D1はmigration 0001〜0011、Phase 8 E2EE/realtime Worker/PWAを適用済み。one-time WebSocket ticket、DO tickle、公開ChromiumのService Worker／IndexedDB／offlineを実測済み
+- 実Cloudflare dev環境: Terraform remote stateでWorker、D1、非公開R2、Durable Object、Turnstile、Cron、Static Assets、Accessを管理。dev D1はmigration 0001〜0012、Phase 9 E2EE/realtime/account deletion Worker/PWAを適用済み。one-time WebSocket ticket、DO tickle、公開ChromiumのService Worker／IndexedDB／offline、remote account erasureと両端末token失効を実測済み
 - Chromium拡張PoC: Manifest V3、最小権限、device-link、E2EE Note/Link/File、current tab、context menu、端末選択、shortcut、one-time WebSocket、cursor同期、受信通知を実装。ローカルWranglerと公開devの実Chromiumでprivate R2 byteと別端末復号まで検証
 
 ローカル結合では、Bootstrap、端末取得、Noteの冪等送信、カーソル同期、ファイルの直接PUT/GET、`file_ref`状態再同期、Web Push Subscription upsertを検証します。

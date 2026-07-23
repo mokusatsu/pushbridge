@@ -31,7 +31,7 @@
 | Phase 8 dev | migration 0011とWorkerを0 add / 1 change / 0 destroyで適用。E2EE/realtime/Web Push capabilityはtrue、Service Auth remote smokeで暗号化Note/FileとDO tickle、公開ChromiumでService Worker／IndexedDB／server削除後Blob／offline reloadに合格。適用後Planは差分なし |
 | Phase 9 Chromium拡張 local/dev | Manifest V3、最小権限、device-link、P-256端末鍵、E2EE Note/Link/File、private R2、current tab/context menu/端末選択/shortcut、one-time WebSocket、cursor同期、通知を実装。実Chromium＋専用Wrangler/D1と公開devの両方で暗号文非漏洩・別端末復号を確認。実Web Pushは通常Chrome未導入かつ一時profileのPushManager permission deniedにより未確認 |
 | Phase 9 Store draft | privacy disclosure、日文listing、permission rationale、公開前checklist、実Chromium 1280x800 screenshot 3枚、再現可能zipを生成。公開privacy URL／support contact／Custom Domain未確定のため提出は未実施 |
-| Account deletion local | migration 0012、即時account/session/device/token/subscription失効、DO WebSocket切断、R2 100件cursor削除、D1物理削除、指数backoff、20回後manual intervention、PWA秘密鍵／IndexedDB消去、RelayMockを実装。Worker 37件、RelayMock 26件、PWA 41件、実Chromium account deletion、fresh D1 local E2Eに合格。devは0012未適用、Terraform PlanはWorkerのみ0 add / 1 change / 0 destroyで承認待ち |
+| Account deletion local/dev | migration 0012、即時account/session/device/token/subscription失効、DO WebSocket切断、R2 100件cursor削除、D1物理削除、指数backoff、20回後manual intervention、PWA秘密鍵／IndexedDB消去、RelayMockを実装。Worker 37件、RelayMock 26件、PWA 41件、実Chromium account deletion、fresh D1 local E2Eに合格。devへ0012とWorker/PWAを適用し、remote smokeで削除完了と端末A/B両tokenの401失効を確認。post-apply Planは差分なし |
 | D1 recovery drill | migration 0001〜0012を適用した隔離ローカルD1に合成user/device/暗号文Pushを作成し、Wrangler exportから別D1へrestore。schema version 12、各件数、暗号文一致、account deletion tableを検証し、一時成果物の削除まで合格 |
 | Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。GitHub上の実行はbranch push後に未確認 |
 
@@ -50,4 +50,4 @@
 
 ## 判定
 
-Cloudflare dev環境はD1 schema version 11、Phase 8 E2EE/realtime Worker/PWA、Web Push／retention bindingsを適用済みでpost-apply Planは差分なし。Service Auth remote smokeと公開Chromiumで暗号化Note/File、private R2、端末B復号、DO tickle、Service Worker／IndexedDB／offlineまで成立した。残る実環境項目は実push service配送、実Cron、Custom Domain上のPasskeyである。
+Cloudflare dev環境はD1 schema version 12、Phase 9 E2EE/realtime/account deletion Worker/PWA、Web Push／retention bindingsを適用済みでpost-apply Planは差分なし。Service Auth remote smokeと公開Chromiumで暗号化Note/File、private R2、端末B復号、DO tickle、Service Worker／IndexedDB／offline、アカウント完全削除と両端末token失効まで成立した。残る実環境項目は実push service配送、実Cron、Custom Domain上のPasskeyである。
