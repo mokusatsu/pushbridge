@@ -3,9 +3,7 @@ import { expect, test, type APIRequestContext, type BrowserContext, type Page } 
 const settingsKey = 'pushbridge.client-settings.v2';
 const tokenKey = 'pushbridge.bearer-token.local.v2';
 const remoteOrigin = process.env.PUSHBRIDGE_REMOTE_ORIGIN ?? 'https://pushbridge-dev.mokusatsu.workers.dev';
-const remoteEnabled = Boolean(process.env.PUSHBRIDGE_REMOTE_ORIGIN
-  && process.env.CF_ACCESS_CLIENT_ID
-  && process.env.CF_ACCESS_CLIENT_SECRET);
+const remoteEnabled = Boolean(process.env.PUSHBRIDGE_REMOTE_ORIGIN);
 
 interface Credential {
   user: { id: string };
@@ -68,12 +66,12 @@ async function prepareDeviceIdentity(context: BrowserContext) {
 async function establishAccessCookie(context: BrowserContext) {
   const clientId = process.env.CF_ACCESS_CLIENT_ID;
   const clientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
-  if (!clientId || !clientSecret) throw new Error('Cloudflare Access service-token environment variables are unavailable.');
+  const headers = clientId && clientSecret ? {
+    'CF-Access-Client-Id': clientId,
+    'CF-Access-Client-Secret': clientSecret,
+  } : {};
   const response = await context.request.get(remoteOrigin, {
-    headers: {
-      'CF-Access-Client-Id': clientId,
-      'CF-Access-Client-Secret': clientSecret,
-    },
+    headers,
   });
   expect(response.status()).toBe(200);
   const cookieNames = (await context.cookies(remoteOrigin)).map((cookie) => cookie.name);
@@ -111,7 +109,7 @@ async function listPushes(request: APIRequestContext, token: string) {
 }
 
 test('public Worker PWA preserves an encrypted File in IndexedDB and offline @remote', async ({ browser, request }) => {
-  test.skip(!remoteEnabled, 'Requires the remote origin and Cloudflare Access service-token environment variables.');
+  test.skip(!remoteEnabled, 'Requires the remote origin; use either a permitted source IP or Cloudflare Access service-token variables.');
   const contextA = await browser.newContext();
   const contextB = await browser.newContext();
   await establishAccessCookie(contextA);

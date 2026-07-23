@@ -3,10 +3,10 @@
 ## Current status
 
 - The remote backend below is connected and its diagnostic reports all required outputs.
-- D1 migrations 0001 and 0002, the real Worker API, PWA Static Assets, R2, Durable Object namespace, Turnstile, Cron, and Access are deployed to dev.
-- Local Note smoke passes. A prior allowlisted remote Note smoke passed; the current execution environment is outside the allowlist and its protected rerun is rejected by Access.
+- D1 migrations 0001 through 0012, the Phase 9 Worker API, PWA Static Assets, R2, Durable Object namespace, Turnstile, Cron, and Access are deployed to dev.
+- Local and remote E2E pass. On 2026-07-24 the current fixed IPv4 passed the public PWA and closed-PWA Web Push E2E without Service Token headers.
 - The workers.dev hostname is protected by a Terraform-managed Access IP allowlist whose actual CIDRs live only in the ignored `terraform.tfvars`.
-- Revalidation found a stale Access state ID with no corresponding API resource. A Plan containing only one Access create was applied, then the API resource and denied unauthorised requests were verified. No D1, R2, or Worker replacement was applied.
+- Revalidation found a stale Access state ID with no corresponding API resource. A Plan containing only one Access create was applied, then the API resource and denied unauthorised requests were verified. On 2026-07-24 its fixed-IP action was corrected from identity `allow` to `non_identity` Service Auth with an in-place-only Plan. No D1, R2, or Worker replacement was applied.
 
 The observations below retain the original empty-state recovery chronology. References to a Dashboard template describe pre-recovery evidence, not the current deployment.
 

@@ -27,6 +27,9 @@
     "cloudflare:local:passkey-e2e": "node scripts/cloudflare-passkey-e2e.mjs",
     "cloudflare:local:recovery-drill": "node scripts/cloudflare-d1-recovery-drill.mjs",
     "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs",
+    "cloudflare:remote:web-push-e2e": "node scripts/cloudflare-web-push-e2e.mjs",
+    "cloudflare:remote:cron-evidence": "node scripts/cloudflare-cron-evidence.mjs",
+    "cloudflare:remote:metrics-evidence": "node scripts/cloudflare-metrics-evidence.mjs",
     "cloudflare:remote:e2e": "npm run --prefix apps/web-pwa test:e2e:remote",
     "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"
   },

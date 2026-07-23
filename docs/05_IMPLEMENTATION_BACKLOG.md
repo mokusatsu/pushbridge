@@ -22,14 +22,14 @@
 | RP-204 Link | PoC実装済み。安全なscheme検証を再確認する必要あり |
 | RP-501 PWA shell | PoC実装済み。NoteのIndexedDB／offlineを確認済み |
 | RP-601〜605 Worker File／R2 | Phase 2〜7 PoC実装済み。private R2 server-ticket、File Push、25 MiB境界、削除／410、client-side PBFE暗号化を統合test。presigned URLは未実装 |
-| RP-502〜503 Web Push | Phase 3 source／local PoCとdev適用済み。subscription暗号化、VAPID、標準暗号、失効、限定retry、端末別ACKを検証。remote subscription CRUD合格、実push service配送は未完了 |
-| RP-501／504 PWA File UX | Phase 5 local実装済み。upload進捗／cancel／retry、送信側の配送待ち／通知済み／取得中／保存済み／再試行中／取得不可を契約APIから表示。Playwright desktop／mobile、Service Worker実更新、単一時系列HTML証跡まで合格。dev実Web Push E2Eは未完了 |
+| RP-502〜503 Web Push | Phase 3 source／local PoCとdev適用済み。subscription暗号化、VAPID、標準暗号、失効、限定retry、端末別ACKを検証。実Edgeのpush service配送、PWA終了中のService Worker復号、IndexedDB commit後cached ACKまで合格 |
+| RP-501／504 PWA File UX | Phase 5 local実装済み。upload進捗／cancel／retry、送信側の配送待ち／通知済み／取得中／保存済み／再試行中／取得不可を契約APIから表示。Playwright desktop／mobile、Service Worker実更新、単一時系列HTML証跡、dev closed-PWA実Web Push、サーバー削除後offline Blob保持まで合格 |
 | RP-301〜304 Realtime | Phase 8 dev実測完了。30秒one-time ticket、session/device束縛、URL非露出subprotocol、Hibernation API、接続/size/backpressure制限、signed cursor tickle、revocation、heartbeat、jitter、sleep復帰をWorker/Chromiumで検証 |
 | RP-701〜704 Chromium拡張 | dev実測完了。Manifest V3最小権限、device-link、P-256端末鍵、E2EE Note/Link/File、private R2、current tab/context menu、端末選択、shortcut、one-time WebSocket、cursor同期、通知、再現可能zipを実装。Wrangler localと公開devの実Chromiumでpeer復号まで検証 |
 
-Cloudflare devではTerraform、D1 migration 0001〜0011、TypeScript Worker bundle、PWA、Web Push／retention／E2EE／realtime binding、Accessを適用済み。Phase 8 Service Auth remote smoke、schema version 11、公開Chromium Service Worker／IndexedDB／offline、post-apply Plan差分なしを確認した。現在の優先順は永続browser profileでの実Web Push配送とPWA終了中cached ACK、拡張機能realtime/File、実Cron、Custom Domain/Passkeyである。一時Chromium/Edge profileのWeb Push probeは`PushManager.subscribe()`がpermission deniedとなり、実配送には到達していない。
+Cloudflare devではTerraform、D1 migration 0001〜0012、TypeScript Worker bundle、PWA、Web Push／retention／E2EE／realtime／account deletion binding、Accessを適用済み。Service Auth remote smoke、schema version 12、公開ブラウザーService Worker／IndexedDB／offline、post-apply Plan差分なしを確認した。実Edgeの短命profileでは本物のPushManager subscriptionを作成し、PWA終了中の暗号化File自動保存、IndexedDB commit後cached ACK、サーバー削除後offline Blob保持まで合格した。Cloudflare Scheduled datasetで実Cronのsuccessも確認済み。残る外部決定はCustom Domain/Passkeyである。
 
-Phase 4はmigration 0006〜0007、D1起点の`delete_pending`状態機械、TTL／pressure削除、180日alias／7日tombstone、日次KiB-second履歴、R2／D1 fault recoveryまでlocal PoCとdev適用を完了。実Cron観測は未完了。
+Phase 4はmigration 0006〜0007、D1起点の`delete_pending`状態機械、TTL／pressure削除、180日alias／7日tombstone、日次KiB-second履歴、R2／D1 fault recoveryまでlocal PoCとdev適用を完了。Cloudflare Scheduled datasetで`17 3 * * *`の実Cron成功を確認済み。
 
 ## Epic E0 — リポジトリと開発基盤
 

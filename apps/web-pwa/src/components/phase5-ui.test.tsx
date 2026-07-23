@@ -71,4 +71,33 @@ describe('Phase 5 file delivery UI', () => {
     expect(status).toHaveTextContent('通知済み 1台');
     expect(status).toHaveTextContent('保存済み 1台');
   });
+
+  it('renders only HTTP(S) received links as executable anchors', () => {
+    const base: PushRecord = {
+      id: 'psh_link',
+      client_guid: 'link_1',
+      type: 'link',
+      source_device_id: 'dev_sender',
+      target: { kind: 'all_other_devices' },
+      title: 'Received link',
+      url: 'javascript:alert(1)',
+      pinned: false,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00Z',
+      modified_at: '2026-01-01T00:00:00Z',
+    };
+    const handlers = {
+      onDismiss: vi.fn(),
+      onPin: vi.fn(),
+      onDelete: vi.fn(),
+      onDownload: vi.fn(),
+      onCopied: vi.fn(),
+    };
+
+    const view = render(<PushCard push={base} {...handlers} />);
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+
+    view.rerender(<PushCard push={{ ...base, url: 'https://example.com/path' }} {...handlers} />);
+    expect(screen.getByRole('link', { name: 'リンクを開く' })).toHaveAttribute('href', 'https://example.com/path');
+  });
 });

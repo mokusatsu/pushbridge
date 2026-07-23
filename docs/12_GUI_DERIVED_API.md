@@ -76,7 +76,7 @@ Miniflare上のWorkerは次を実装済みである。
 - pin、dismiss、削除
 - ストレージ使用量
 
-ファイルupload、R2本体管理、Web Push配送、WebSocket realtimeは未実装である。Capabilitiesでは`direct_upload=false`、`web_push_delivery=false`として公開し、クライアントが未実装機能を有効化しないようにしている。
+ファイルupload、private R2本体管理、Web Push配送、WebSocket realtimeはWorkerへ実装し、dev実測済みである。File転送はWorker bindingの短寿命server-ticket方式なので、Capabilitiesは`direct_upload=false`を維持する。`web_push_delivery=true`は実Edgeのclosed-PWA配送とIndexedDB commit後ACKまで確認したdevだけで公開する。
 
 ## 5. 次にAPIへ追加すべき状態
 

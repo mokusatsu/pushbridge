@@ -178,7 +178,7 @@ variable "device_mutation_rate_limit" {
 }
 
 variable "access_ip_allowlist" {
-  description = "Optional Cloudflare Access application that restricts the complete Worker hostname, including Static Assets, to source IP CIDRs. Set to null to disable."
+  description = "Optional Cloudflare Access application that service-authenticates source IP CIDRs for the complete Worker hostname, including Static Assets. Set to null to disable."
   type = object({
     hostname = string
     cidrs    = set(string)

@@ -10,8 +10,8 @@ resource "cloudflare_zero_trust_access_application" "app" {
 
   policies = concat(
     [{
-      name       = "Allow configured source IPs"
-      decision   = "allow"
+      name       = "Service-auth configured source IPs"
+      decision   = "non_identity"
       precedence = 1
       include = [
         for cidr in sort(tolist(var.access_ip_allowlist.cidrs)) : {

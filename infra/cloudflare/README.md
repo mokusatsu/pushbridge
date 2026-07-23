@@ -123,7 +123,7 @@ access_ip_allowlist = {
 }
 ```
 
-この設定ではCloudflareが観測する接続元IPを継続的に評価します。許可IP以外からはPWA、Service Worker、APIのいずれにも到達できません。制限を無効にする場合は`access_ip_allowlist = null`を明示します。
+この設定ではCloudflareが観測する接続元IPをService Authポリシーの非ID属性として継続的に評価します。固定IPからはIdPログインなしで到達でき、許可IP以外からはPWA、Service Worker、APIのいずれにも到達できません。`allow`アクションはIdPログインを開始するため、IPだけで非対話アクセスさせる用途には使用しません。制限を無効にする場合は`access_ip_allowlist = null`を明示します。
 
 自動smokeなど非対話クライアントは、Accessアプリを迂回させずService Authポリシーで個別のService Tokenを許可します。DashboardのAction `Allow`ではなく`Service Auth`を使い、TerraformにはClient IDやSecretではなくService TokenのリソースUUIDだけを未追跡`*.auto.tfvars`へ設定します。
 

@@ -18,6 +18,16 @@ function contentForCopy(push: PushRecord): string {
   return [push.title, push.body].filter(Boolean).join('\n') || push.file?.name || '';
 }
 
+function safeExternalUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function heading(push: PushRecord): string {
   if (push.status === 'expired' && !push.title && !push.body && !push.url && !push.file) return '期限切れのPush';
   if (push.title) return push.title;
@@ -58,6 +68,7 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
     ? fileState === 'deleted' ? '削除済み' : '期限切れ'
     : fileReady ? '保存' : '準備中';
   const sentHere = Boolean(currentDeviceId && push.source_device_id === currentDeviceId);
+  const externalUrl = safeExternalUrl(push.url);
   const deliveryCounts = push.file_deliveries?.reduce<Record<string, number>>((counts, delivery) => ({
     ...counts,
     [delivery.state]: (counts[delivery.state] ?? 0) + 1,
@@ -93,8 +104,8 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
 
         {archived && <p className="push-body muted-copy">{retainedContent ? 'サーバー上では削除済みです。以下はこの端末に保存された内容です。' : 'サーバーから削除され、端末内にも内容が残っていません。'}</p>}
         {push.body && <p className="push-body">{push.body}</p>}
-        {push.url && (
-          <a className="link-preview" href={push.url} target="_blank" rel="noreferrer noopener">
+        {externalUrl && (
+          <a className="link-preview" href={externalUrl} target="_blank" rel="noreferrer noopener">
             <Icon name="link" size={17} /><span>{push.url}</span><Icon name="open" size={15} />
           </a>
         )}
@@ -132,7 +143,7 @@ export function PushCard({ push, currentDeviceId, onDismiss, onPin, onDelete, on
           </div>
           <div className="card-actions">
             <button className="icon-button" type="button" onClick={() => void copy()} aria-label="内容をコピー" disabled={!contentForCopy(push)}><Icon name="copy" size={18} /></button>
-            {push.url && <a className="icon-button" href={push.url} target="_blank" rel="noreferrer noopener" aria-label="リンクを開く"><Icon name="open" size={18} /></a>}
+            {externalUrl && <a className="icon-button" href={externalUrl} target="_blank" rel="noreferrer noopener" aria-label="リンクを開く"><Icon name="open" size={18} /></a>}
             {!archived && (
               <button className="button button-ghost button-small" type="button" onClick={() => onPin(!push.pinned)}>
                 {push.pinned ? 'ピン解除' : 'ピン留め'}
