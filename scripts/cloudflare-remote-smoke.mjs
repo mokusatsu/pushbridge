@@ -176,6 +176,18 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function isPresignedR2Url(value) {
+  const target = new URL(value);
+  return target.protocol === "https:"
+    && /^[a-f0-9]{32}\.r2\.cloudflarestorage\.com$/u.test(target.hostname)
+    && target.searchParams.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256"
+    && Boolean(target.searchParams.get("X-Amz-Signature"));
+}
+
+function withoutCredentials(init = {}) {
+  return { ...init, signal: init.signal ?? AbortSignal.timeout(10_000) };
+}
+
 async function request(path, init = {}) {
   const response = await fetch(`${origin}${path}`, withAccess(init));
   const contentType = response.headers.get("content-type") ?? "";
@@ -282,8 +294,9 @@ try {
   const capabilities = await request("/api/v1/system/capabilities");
   expectStatus(capabilities, 200, "capabilities");
   assert(capabilities.body.features?.device_registration === true, "device registration is unavailable");
-  assert(capabilities.body.features?.direct_upload === false, "server-ticket must not be advertised as direct upload");
+  const directUpload = capabilities.body.features?.direct_upload === true;
   assert(capabilities.body.transports?.upload?.includes("server-ticket"), "server-ticket upload transport is unavailable");
+  assert(!directUpload || capabilities.body.transports?.upload?.includes("presigned-url"), "direct upload capability has no presigned transport");
   if (expectRealtime) {
     assert(capabilities.body.features?.realtime === true, "realtime capability is disabled");
     assert(capabilities.body.transports?.realtime?.includes("websocket"), "WebSocket realtime transport is unavailable");
@@ -476,17 +489,30 @@ try {
   expectStatus(initialized, 201, "File init");
   fileId = initialized.body.file?.id;
   assert(typeof fileId === "string", "File init did not return an ID");
-  assert(new URL(initialized.body.upload_url).origin === origin, "upload ticket escaped the Worker origin");
+  const uploadTarget = new URL(initialized.body.upload_url);
+  if (directUpload) {
+    assert(isPresignedR2Url(uploadTarget), "direct upload did not return a trusted R2 SigV4 URL");
+  } else {
+    assert(uploadTarget.origin === origin, "server-ticket upload escaped the Worker origin");
+  }
   const uploadedBytes = e2eeEnabled ? await encryptFile(accountKey, 1, fileId, fileBytes) : fileBytes;
   const uploadedHash = createHash("sha256").update(uploadedBytes).digest("hex");
 
-  const upload = await fetch(initialized.body.upload_url, withAccess({
+  const uploadInit = {
     method: "PUT",
     headers: initialized.body.upload_headers,
     body: uploadedBytes,
-  }));
+  };
+  const upload = await fetch(
+    initialized.body.upload_url,
+    directUpload ? withoutCredentials(uploadInit) : withAccess(uploadInit),
+  );
   assert(upload.status === 200, `File upload returned HTTP ${upload.status}`);
-  const completed = await request(`/api/v1/files/${encodeURIComponent(fileId)}/complete`, { method: "POST", headers: authA });
+  const completed = await request(`/api/v1/files/${encodeURIComponent(fileId)}/complete`, {
+    method: "POST",
+    headers: { ...authA, "content-type": "application/json" },
+    body: JSON.stringify({ sha256: uploadedHash }),
+  });
   expectStatus(completed, 200, "File complete");
   assert(completed.body.state === "ready" && completed.body.actual_sha256 === uploadedHash, "File complete did not verify the uploaded bytes");
   if (e2eeEnabled) {
@@ -524,7 +550,17 @@ try {
   const downloadTicket = await request(`/api/v1/files/${encodeURIComponent(fileId)}/download-ticket`, { method: "POST", headers: authB });
   expectStatus(downloadTicket, 200, "File download ticket");
   assert(new URL(downloadTicket.body.download_url).origin === origin, "download ticket escaped the Worker origin");
-  const downloaded = await fetch(downloadTicket.body.download_url, withAccess());
+  const ticketExchange = await fetch(downloadTicket.body.download_url, withAccess({ redirect: "manual" }));
+  let downloaded = ticketExchange;
+  if (directUpload) {
+    assert(ticketExchange.status === 307, `direct download ticket returned HTTP ${ticketExchange.status}`);
+    const location = ticketExchange.headers.get("location");
+    assert(location && isPresignedR2Url(location), "direct download ticket did not return a trusted R2 SigV4 URL");
+    const directTarget = new URL(location);
+    assert(directTarget.searchParams.get("X-Amz-Expires") === "30", "direct download URL lifetime is not 30 seconds");
+    await ticketExchange.body?.cancel();
+    downloaded = await fetch(location, withoutCredentials());
+  }
   assert(downloaded.status === 200, `File download returned HTTP ${downloaded.status}`);
   assert(downloaded.headers.get("content-disposition")?.startsWith("attachment"), "File download was not forced as an attachment");
   const downloadedBytes = new Uint8Array(await downloaded.arrayBuffer());
@@ -533,7 +569,7 @@ try {
     const decryptedBytes = await decryptFile(accountKey, fileId, downloadedBytes);
     assert(Buffer.from(decryptedBytes).equals(Buffer.from(fileBytes)), "device B could not decrypt the downloaded File");
   }
-  const reusedDownload = await fetch(downloadTicket.body.download_url, withAccess());
+  const reusedDownload = await fetch(downloadTicket.body.download_url, withAccess({ redirect: "manual" }));
   assert(reusedDownload.status === 410, `used File ticket returned HTTP ${reusedDownload.status}`);
 
   const deletedFile = await request(`/api/v1/files/${encodeURIComponent(fileId)}`, { method: "DELETE", headers: authA });
@@ -542,7 +578,7 @@ try {
   const missedDeliveries = await request(`/api/v1/files/${encodeURIComponent(fileId)}/deliveries`, { headers: authA });
   expectStatus(missedDeliveries, 200, "missed File delivery ledger");
   assert(missedDeliveries.body.length === 1 && missedDeliveries.body[0].state === "missed", "unacknowledged File delivery was not marked missed");
-  const staleDownload = await fetch(downloadTicket.body.download_url, withAccess());
+  const staleDownload = await fetch(downloadTicket.body.download_url, withAccess({ redirect: "manual" }));
   assert(staleDownload.status === 410, `deleted File ticket returned HTTP ${staleDownload.status}`);
   const deletedDelta = await request(`/api/v1/pushes?limit=100&after=${encodeURIComponent(fileDelta.body.next_cursor)}`, { headers: authB });
   expectStatus(deletedDelta, 200, "device B deleted File cursor sync");
@@ -572,7 +608,7 @@ try {
   authA = undefined;
   authB = undefined;
 
-  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, private R2 byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code, completed account erasure, and both device tokens revoked${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", Web Push subscription CRUD" : ""}${expectRealtime ? ", and one-time Durable Object WebSocket tickle" : ""}.`);
+  console.log(`Cloudflare remote smoke passed for ${origin}: health, D1 API, two devices, Bearer auth, Note/File delivery, ${directUpload ? "direct R2 SigV4" : "private R2 server-ticket"} byte verification, one-use tickets, delivery pending/missed states, deletion, idempotency, cursor sync, PWA, SPA fallback, Service Worker ACK code, completed account erasure, and both device tokens revoked${e2eeEnabled ? ", P-256 device envelopes, encrypted Note/File metadata, and File decryption" : ""}${expectWebPush ? ", Web Push subscription CRUD" : ""}${expectRealtime ? ", and one-time Durable Object WebSocket tickle" : ""}.`);
 } finally {
   if (realtimeSocket?.readyState < WebSocket.CLOSING) realtimeSocket.close(1000, "smoke complete");
   if (authA) {
