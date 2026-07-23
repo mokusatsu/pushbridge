@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:remote": "playwright test --config playwright.remote.config.ts",
     "evidence:browser": "node tools/generate-browser-evidence.mjs",
     "test:e2e:install": "playwright install --with-deps chromium",
     "typecheck": "tsc -b --pretty false",

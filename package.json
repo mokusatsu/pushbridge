@@ -17,6 +17,7 @@
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",
     "cloudflare:local:passkey-e2e": "node scripts/cloudflare-passkey-e2e.mjs",
     "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs",
+    "cloudflare:remote:e2e": "npm run --prefix apps/web-pwa test:e2e:remote",
     "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"
   },
   "engines": {

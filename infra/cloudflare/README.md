@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usageを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。Phase 3 sourceではWeb Push subscription暗号化保存、VAPID配送、端末別配送台帳、Service Workerのバックグラウンド保存とACKまで実装済みですが、dev migration／秘密値／実ブラウザー確認前は配送を有効と扱いません。専用R2資格情報によるpresigned URL、WebSocket realtime、正式認証は未実装です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelopeを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0010とPhase 7 Worker/PWAを適用済みで、E2EEを必須化しています。専用R2資格情報によるpresigned URL、WebSocket realtime、Custom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 
@@ -22,7 +22,7 @@ Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTe
 ├── infra/                  Terraform
 ├── worker/
 │   ├── index.mjs           安全なブートストラップWorker
-│   └── migrations/         D1 SQL migrations（0004 File、0005 Web Push、0006〜0007 retention usage）
+│   └── migrations/         D1 SQL migrations（0004 File〜0010 E2EE）
 ├── app/
 │   ├── dist/               Workers Static Assets
 │   └── headers.conf        静的配信のセキュリティヘッダー
@@ -72,11 +72,14 @@ npm run cloudflare:state:diagnose
 npm run check
 npm run cloudflare:local:smoke
 npm run cloudflare:remote:smoke
+npm run cloudflare:remote:e2e
 ```
 
 state診断はbackend type、bucket、key、workspace、resource/output名だけを表示し、state本文やsecret値は表示しません。`backend_reachable_state_object_missing`の場合は`terraform apply`へ進まず、Cloudflare実環境との照合とimport計画を先に行ってください。
 
 remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。Cloudflare AccessのService Authを使う場合は`CF-Access-Client-Id`と`CF-Access-Client-Secret`を各HTTPリクエストへ付与する必要があります。テスト用Pushと2台目の端末は終了時に片付けますが、bootstrapした識別可能な`smoke_*`ユーザーと端末AはAPI仕様上残ります。
+
+`cloudflare:remote:e2e`は実Chromiumで公開PWA、E2EE、IndexedDB、Service Worker、offline reloadを検証します。Service Worker script取得はservice-tokenヘッダーを継承しないため、実行元IPがAccess allowlist外の場合は`/sw.js`が403になります。Accessを迂回せず、allowlist済み端末から実行してください。
 
 remote stateが失われた環境の実測結果とimport対応表は、リポジトリルートの`docs/13_CLOUDFLARE_STATE_RECOVERY.md`に記録しています。
 
@@ -235,6 +238,9 @@ worker/migrations/0004_file_api.sql
 worker/migrations/0005_web_push_subscriptions.sql
 worker/migrations/0006_retention_cleanup.sql
 worker/migrations/0007_storage_usage_units.sql
+worker/migrations/0008_passkey_auth.sql
+worker/migrations/0009_device_links.sql
+worker/migrations/0010_e2ee.sql
 ```
 
 適用前に一覧を確認できます。
