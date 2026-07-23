@@ -1,4 +1,5 @@
 import { authenticate, bootstrap } from "./auth";
+import { requestAccountDeletion } from "./account";
 import { currentDevice, linkDevice, listDevices, mutateDevice } from "./devices";
 import { createDeviceLink, deviceLinkStatus, redeemDeviceLink } from "./device-links";
 import { currentDeviceEnvelope, e2eeStatus, initializeAccountKey, putCurrentDeviceKey, putDeviceEnvelope, recoveryEnvelope } from "./e2ee";
@@ -64,6 +65,7 @@ export function createRouter(runtime: Runtime): (request: Request, env: Env) => 
 
       const auth = await authenticate(request, env, requestId, runtime);
       if (request.method === "GET" && path === "/v1/auth/sessions") return listBrowserSessions(env, auth, requestId);
+      if (request.method === "DELETE" && path === "/v1/account") return requestAccountDeletion(request, env, auth, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/logout") return logoutBrowserSession(env, auth, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/session/rotate") return rotateBrowserSession(env, auth, requestId, runtime);
       const sessionMatch = path.match(/^\/v1\/auth\/sessions\/([^/]+)$/);

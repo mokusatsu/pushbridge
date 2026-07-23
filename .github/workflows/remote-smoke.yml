@@ -1,0 +1,63 @@
+name: Cloudflare dev remote smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Cloudflare dev origin
+        required: true
+        type: string
+        default: https://pushbridge-dev.mokusatsu.workers.dev
+      browser_e2e:
+        description: Run PWA and Chromium extension browser E2E
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pushbridge-cloudflare-dev-remote-smoke
+  cancel-in-progress: false
+
+jobs:
+  remote-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PUSHBRIDGE_REMOTE_ORIGIN: ${{ inputs.origin }}
+      PUSHBRIDGE_EXTENSION_E2E_ORIGIN: ${{ inputs.origin }}
+      PUSHBRIDGE_EXPECT_WEB_PUSH: "true"
+      PUSHBRIDGE_EXPECT_REALTIME: "true"
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/web-pwa/package-lock.json
+      - name: Verify required Cloudflare Access secrets
+        shell: bash
+        run: |
+          test -n "$CF_ACCESS_CLIENT_ID"
+          test -n "$CF_ACCESS_CLIENT_SECRET"
+      - name: Install Node workspaces
+        run: |
+          npm ci
+          npm ci --prefix apps/web-pwa
+      - name: API, D1, private R2, E2EE, and realtime smoke
+        run: npm run cloudflare:remote:smoke
+      - name: Install Playwright Chromium
+        if: ${{ inputs.browser_e2e }}
+        run: npm run --prefix apps/web-pwa test:e2e:install
+      - name: Public PWA browser E2E
+        if: ${{ inputs.browser_e2e }}
+        run: npm run cloudflare:remote:e2e
+      - name: Chromium extension browser E2E
+        if: ${{ inputs.browser_e2e }}
+        run: npm run extension:e2e:remote

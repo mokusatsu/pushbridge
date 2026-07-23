@@ -13,7 +13,7 @@ npm run extension:package
 npm run extension:store:evidence
 ```
 
-`extension:check`はbuild、型検査、単体試験、実Chromiumへのunpacked loadを行います。`extension:e2e:local`は専用の一時D1/Wrangler環境でdevice-link、E2EE鍵配送、暗号化Note/Link/File、private R2 byte、送信先指定、one-time WebSocket、cursor同期、受信通知、別端末での復号まで確認します。`PUSHBRIDGE_EXTENSION_E2E_ORIGIN`とCloudflare Access service-token環境変数を設定した`npm run extension:e2e:remote`は、同じ縦切りをdev D1/R2/DOへ実行します。テスト用Push、File、拡張端末は終了時に回収しますが、アカウント削除APIが未実装のため、識別可能なbootstrapユーザーと初期端末は残ります。`extension:package`は`.runtime/`に再現可能なzipを生成します。`extension:store:evidence`は未接続状態の実Chromium extension pageを1280x800で3枚撮影し、account dataを含まないStore候補画像を更新します。
+`extension:check`はbuild、型検査、単体試験、実Chromiumへのunpacked loadを行います。`extension:e2e:local`は専用の一時D1/Wrangler環境でdevice-link、E2EE鍵配送、暗号化Note/Link/File、private R2 byte、送信先指定、one-time WebSocket、cursor同期、受信通知、別端末での復号まで確認します。`PUSHBRIDGE_EXTENSION_E2E_ORIGIN`とCloudflare Access service-token環境変数を設定した`npm run extension:e2e:remote`は、同じ縦切りをdev D1/R2/DOへ実行します。テスト用Push、File、端末、bootstrapアカウントは終了時にaccount deletion jobで回収します。`extension:package`は`.runtime/`に再現可能なzipを生成します。`extension:store:evidence`は未接続状態の実Chromium extension pageを1280x800で3枚撮影し、account dataを含まないStore候補画像を更新します。
 
 手動確認では、`npm run extension:build`後にChromiumの拡張機能管理画面から`apps/chromium-extension/dist`を「パッケージ化されていない拡張機能」として読み込みます。dev APIを利用するには、同じブラウザーprofileでCloudflare Accessへログイン済みである必要があります。
 

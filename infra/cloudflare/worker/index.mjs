@@ -1680,6 +1680,125 @@ async function markUndeliveredMissed(env, fileId, reason, runtime) {
     WHERE file_id = ? AND state != 'cached'`).bind(now, now, reason, fileId).run();
 }
 
+// infra/cloudflare/worker/src/account.ts
+var MAX_RETRY_MS = 60 * 60 * 1e3;
+var MAX_ATTEMPTS = 20;
+var DELETE_BATCH_SIZE = 100;
+function retryDelay(attempts) {
+  return Math.min(MAX_RETRY_MS, 6e4 * 2 ** Math.min(6, Math.max(0, attempts)));
+}
+function deletionOut(job) {
+  return {
+    id: job.id,
+    state: job.state,
+    requested_at: iso(job.requested_at),
+    completed_at: iso(job.completed_at)
+  };
+}
+async function disconnectRealtime(env, userId) {
+  try {
+    const stub = env.USER_HUB.get(env.USER_HUB.idFromName(userId));
+    await stub.fetch("https://user-hub.internal/disconnect", {
+      method: "POST",
+      headers: { "x-pushbridge-user-id": userId }
+    });
+  } catch {
+  }
+}
+async function failJob(env, job, now, code) {
+  const attempts = Number(job.attempts) + 1;
+  const state = attempts >= MAX_ATTEMPTS ? "manual_intervention" : "failed";
+  const retryAt = attempts >= MAX_ATTEMPTS ? null : now + retryDelay(attempts);
+  await env.DB.prepare(`UPDATE account_deletion_jobs SET state = ?, attempts = ?,
+    retry_at = ?, updated_at = ?, last_error_code = ? WHERE id = ? AND state != 'completed'`).bind(state, attempts, retryAt, now, code, job.id).run();
+}
+async function finalizeAccount(env, job, now) {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM realtime_tickets WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM device_links WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM file_tickets WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM file_deliveries WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM web_push_subscriptions WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM device_key_envelopes WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM account_key_versions WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM passkey_credentials WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM auth_challenges WHERE user_id = ? OR pending_user_id = ?").bind(job.user_id, job.user_id),
+    env.DB.prepare("DELETE FROM pushes WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM files WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM quota_daily WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM api_tokens WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM devices WHERE user_id = ?").bind(job.user_id),
+    env.DB.prepare("DELETE FROM users WHERE id = ? AND deleted_at IS NOT NULL").bind(job.user_id),
+    env.DB.prepare(`UPDATE account_deletion_jobs SET state = 'completed', updated_at = ?,
+      retry_at = NULL, last_error_code = NULL, completed_at = ? WHERE id = ?`).bind(now, now, job.id)
+  ]);
+}
+async function processJob(env, job, runtime) {
+  const now = runtime.now();
+  const total = await env.DB.prepare("SELECT COUNT(*) AS count FROM files WHERE user_id = ?").bind(job.user_id).first();
+  const files = await env.DB.prepare(`SELECT id, r2_key FROM files WHERE user_id = ?
+    AND (? IS NULL OR id > ?) ORDER BY id LIMIT ?`).bind(job.user_id, job.cursor_file_id, job.cursor_file_id, DELETE_BATCH_SIZE).all();
+  let deleted = 0;
+  let cursor = job.cursor_file_id;
+  for (const file of files.results) {
+    try {
+      await env.FILES.delete(file.r2_key);
+      deleted += 1;
+      cursor = file.id;
+    } catch {
+      await env.DB.prepare(`UPDATE account_deletion_jobs SET r2_objects_found = ?,
+        r2_objects_deleted = r2_objects_deleted + ?, cursor_file_id = ?, updated_at = ? WHERE id = ?`).bind(Number(total?.count ?? 0), deleted, cursor, now, job.id).run();
+      await failJob(env, job, now, "r2_delete_failed");
+      return;
+    }
+  }
+  const remaining = cursor == null ? null : await env.DB.prepare(`SELECT id FROM files
+    WHERE user_id = ? AND id > ? ORDER BY id LIMIT 1`).bind(job.user_id, cursor).first();
+  await env.DB.prepare(`UPDATE account_deletion_jobs SET r2_objects_found = ?,
+    r2_objects_deleted = r2_objects_deleted + ?, cursor_file_id = ?, updated_at = ?,
+    state = 'pending', retry_at = NULL, last_error_code = NULL WHERE id = ?`).bind(Number(total?.count ?? 0), deleted, cursor, now, job.id).run();
+  if (remaining) return;
+  try {
+    await finalizeAccount(env, job, now);
+  } catch {
+    await failJob(env, job, now, "d1_finalize_failed");
+  }
+}
+async function processAccountDeletionJobs(env, runtime, onlyUserId) {
+  const now = runtime.now();
+  const jobs = await env.DB.prepare(`SELECT * FROM account_deletion_jobs
+    WHERE state IN ('pending', 'failed') AND (retry_at IS NULL OR retry_at <= ?)
+      AND (? IS NULL OR user_id = ?)
+    ORDER BY requested_at, id LIMIT 20`).bind(now, onlyUserId ?? null, onlyUserId ?? null).all();
+  for (const job of jobs.results) await processJob(env, job, runtime);
+  return jobs.results.length;
+}
+async function requestAccountDeletion(request, env, auth, requestId, runtime) {
+  const body = await bodyJson(request, requestId);
+  if (body.confirmation !== "DELETE") {
+    return problem(422, "account_deletion_confirmation_required", "Set confirmation to DELETE to remove this account.", requestId);
+  }
+  const existing = await env.DB.prepare(`SELECT * FROM account_deletion_jobs
+    WHERE user_id = ? AND state != 'completed' ORDER BY requested_at DESC LIMIT 1`).bind(auth.user_id).first();
+  if (existing) return json({ deletion: deletionOut(existing) }, { status: 202, headers: { "x-request-id": requestId } });
+  const now = runtime.now();
+  const jobId = runtime.id("del");
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL").bind(now, now, auth.user_id),
+    env.DB.prepare("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?").bind(now, auth.user_id),
+    env.DB.prepare("UPDATE api_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE user_id = ?").bind(now, auth.user_id),
+    env.DB.prepare("UPDATE devices SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE user_id = ?").bind(now, now, auth.user_id),
+    env.DB.prepare("UPDATE web_push_subscriptions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE user_id = ?").bind(now, now, auth.user_id),
+    env.DB.prepare(`INSERT INTO account_deletion_jobs
+      (id, user_id, state, requested_at, updated_at) VALUES (?, ?, 'pending', ?, ?)`).bind(jobId, auth.user_id, now, now)
+  ]);
+  await disconnectRealtime(env, auth.user_id);
+  await processAccountDeletionJobs(env, runtime, auth.user_id);
+  const job = await env.DB.prepare("SELECT * FROM account_deletion_jobs WHERE id = ?").bind(jobId).first();
+  return json({ deletion: deletionOut(job) }, { status: 202, headers: { "x-request-id": requestId } });
+}
+
 // infra/cloudflare/worker/src/cleanup.ts
 var DAY_MS = 24 * 60 * 60 * 1e3;
 var TOMBSTONE_TTL_MS = 7 * DAY_MS;
@@ -1768,7 +1887,7 @@ async function effectiveBudget(env, policy, now) {
   const remainingByteDays = Math.max(0, policy.monthlyByteDayBudget - Number(consumed?.value ?? 0) * 1024 / 86400);
   return Math.min(policy.budgetBytes, Math.floor(remainingByteDays / remainingDays));
 }
-function retryDelay(attempts) {
+function retryDelay2(attempts) {
   return Math.min(MAX_DELETE_RETRY_MS, 6e4 * 2 ** Math.min(6, Math.max(0, attempts)));
 }
 async function transitionExpiredFiles(env, now) {
@@ -1811,7 +1930,7 @@ async function processPendingDeletes(env, runtime, report) {
       report.deleteFailures += 1;
       try {
         await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
-          r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay(Number(row.r2_delete_attempts)), row.id).run();
+          r2_delete_retry_at = ?, r2_delete_error_code = 'r2_delete_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay2(Number(row.r2_delete_attempts)), row.id).run();
       } catch {
         report.errors += 1;
       }
@@ -1838,7 +1957,7 @@ async function processPendingDeletes(env, runtime, report) {
       report.errors += 1;
       try {
         await env.DB.prepare(`UPDATE files SET r2_delete_attempts = r2_delete_attempts + 1,
-          r2_delete_retry_at = ?, r2_delete_error_code = 'd1_finalize_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay(Number(row.r2_delete_attempts)), row.id).run();
+          r2_delete_retry_at = ?, r2_delete_error_code = 'd1_finalize_failed' WHERE id = ? AND state = 'delete_pending'`).bind(now + retryDelay2(Number(row.r2_delete_attempts)), row.id).run();
       } catch {
         report.errors += 1;
       }
@@ -1910,7 +2029,8 @@ async function cleanupExpiredMetadata(env, runtime, requiredBytes = 0) {
     aliasTombstones: 0,
     purgedTombstones: 0,
     purgedFileAliases: 0,
-    errors: 0
+    errors: 0,
+    accountDeletionJobs: 0
   };
   const now = runtime.now();
   try {
@@ -1944,6 +2064,11 @@ async function cleanupExpiredMetadata(env, runtime, requiredBytes = 0) {
     current = await storageTotals(env);
   }
   await cleanupMetadata(env, now, report);
+  try {
+    report.accountDeletionJobs = await processAccountDeletionJobs(env, runtime);
+  } catch {
+    report.errors += 1;
+  }
   try {
     await recordUsageSample(env, now, current.totalBytes);
   } catch {
@@ -20215,6 +20340,7 @@ function createRouter(runtime) {
       if (!path.startsWith("/v1/")) return problem(404, "not_found", "Endpoint not found.", requestId);
       const auth = await authenticate(request, env, requestId, runtime);
       if (request.method === "GET" && path === "/v1/auth/sessions") return listBrowserSessions(env, auth, requestId);
+      if (request.method === "DELETE" && path === "/v1/account") return requestAccountDeletion(request, env, auth, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/logout") return logoutBrowserSession(env, auth, requestId, runtime);
       if (request.method === "POST" && path === "/v1/auth/session/rotate") return rotateBrowserSession(env, auth, requestId, runtime);
       const sessionMatch = path.match(/^\/v1\/auth\/sessions\/([^/]+)$/);
@@ -20279,6 +20405,7 @@ var UserHub = class {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/connect") return this.connect(request);
     if (request.method === "POST" && url.pathname === "/tickle") return this.tickle(request);
+    if (request.method === "POST" && url.pathname === "/disconnect") return this.disconnect(request);
     return problem(404, "not_found", "UserHub endpoint not found.", crypto.randomUUID());
   }
   async active(attachment) {
@@ -20360,6 +20487,19 @@ var UserHub = class {
       sent += 1;
     }
     return json({ accepted: true, sent, disconnected });
+  }
+  disconnect(request) {
+    const userId = request.headers.get("x-pushbridge-user-id");
+    if (!userId) return json({ accepted: false }, { status: 400 });
+    let disconnected = 0;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment();
+      if (attachment?.userId === userId) {
+        socket.close(4401, "account deleted");
+        disconnected += 1;
+      }
+    }
+    return json({ accepted: true, disconnected });
   }
   async webSocketMessage(socket, message) {
     const length = typeof message === "string" ? new TextEncoder().encode(message).byteLength : message.byteLength;

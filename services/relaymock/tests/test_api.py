@@ -222,7 +222,6 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
     completed = client.post(f"/v1/files/{file_id}/complete", headers=auth_headers)
     assert completed.status_code == 200
     assert completed.json()["state"] == "ready"
-
     linked = client.post(
         "/v1/devices/link",
         headers=auth_headers,
@@ -313,6 +312,43 @@ def test_file_lifecycle(client: TestClient, auth_headers: dict[str, str]) -> Non
     states = {item["destination_device_id"]: item["state"] for item in deliveries}
     assert states[linked["device"]["id"]] == "cached"
     assert states[third["device"]["id"]] == "missed"
+
+
+def test_account_deletion_removes_file_bytes_and_revokes_access(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    content = b"account deletion fixture"
+    initialized = client.post(
+        "/v1/files/init",
+        headers=auth_headers,
+        json={
+            "filename": "delete.bin",
+            "content_type": "application/octet-stream",
+            "size": len(content),
+            "expires_in": 86400,
+        },
+    )
+    assert initialized.status_code == 201
+    upload_url = initialized.json()["upload_url"]
+    assert client.put(upload_url, content=content).status_code == 200
+
+    invalid = client.request(
+        "DELETE",
+        "/v1/account",
+        headers=auth_headers,
+        json={"confirmation": "delete"},
+    )
+    assert invalid.status_code == 422
+    deleted = client.request(
+        "DELETE",
+        "/v1/account",
+        headers=auth_headers,
+        json={"confirmation": "DELETE"},
+    )
+    assert deleted.status_code == 202
+    assert deleted.json()["deletion"]["state"] == "completed"
+    assert client.get("/v1/devices", headers=auth_headers).status_code == 401
+    assert client.put(upload_url, content=content).status_code in {403, 404}
 
 
 def test_upload_reservations_reject_capacity_overflow(

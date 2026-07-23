@@ -424,6 +424,21 @@ class DownloadTicketOut(StrictModel):
     expires_at: datetime
 
 
+class AccountDeletionIn(StrictModel):
+    confirmation: Literal["DELETE"]
+
+
+class AccountDeletionReceipt(StrictModel):
+    id: str
+    state: Literal["completed"]
+    requested_at: datetime
+    completed_at: datetime
+
+
+class AccountDeletionOut(StrictModel):
+    deletion: AccountDeletionReceipt
+
+
 class RealtimeTicketOut(StrictModel):
     ticket: str = Field(min_length=1)
     url: UriReference

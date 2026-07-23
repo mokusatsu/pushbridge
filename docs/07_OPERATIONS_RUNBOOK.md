@@ -211,6 +211,8 @@ Cronで処理する候補:
 
 大量deleteを一回のCronで処理しない。batchとcursorを使い、次回へ継続する。Worker CPU/time limitを超えない。
 
+Account deletionは`DELETE /v1/account`受理時に利用者、端末、session、token、subscriptionを即時失効させる。`account_deletion_jobs`の`pending`／`failed`はCronが再試行し、R2 objectを100件単位のcursorで削除した後だけD1 metadataを物理削除する。20回失敗すると`manual_intervention`へ移して自動loopを止める。完了jobにはID、時刻、件数だけを残し、コンテンツや資格情報は残さない。
+
 ## 9. 無料枠逼迫
 
 ### 70%

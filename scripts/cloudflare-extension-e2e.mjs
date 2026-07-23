@@ -412,6 +412,13 @@ try {
   if (auth?.access_token && extensionDeviceId) {
     await request(`/devices/${encodeURIComponent(extensionDeviceId)}`, { method: 'DELETE' }, auth.access_token).catch(() => undefined);
   }
+  if (auth?.access_token) {
+    await request('/account', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: 'DELETE' }),
+    }, auth.access_token).catch(() => undefined);
+  }
   await context?.close();
   if (windows && child?.pid) {
     spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });

@@ -1,4 +1,5 @@
 import { markUndeliveredMissed } from "./deliveries";
+import { processAccountDeletionJobs } from "./account";
 import type { Env, FileRow, Runtime } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +36,7 @@ export interface CleanupReport extends StorageTotals {
   purgedTombstones: number;
   purgedFileAliases: number;
   errors: number;
+  accountDeletionJobs: number;
 }
 
 interface UsageRow {
@@ -281,6 +283,7 @@ export async function cleanupExpiredMetadata(env: Env, runtime: Runtime, require
     purgedTombstones: 0,
     purgedFileAliases: 0,
     errors: 0,
+    accountDeletionJobs: 0,
   };
   const now = runtime.now();
   try {
@@ -311,6 +314,11 @@ export async function cleanupExpiredMetadata(env: Env, runtime: Runtime, require
   }
 
   await cleanupMetadata(env, now, report);
+  try {
+    report.accountDeletionJobs = await processAccountDeletionJobs(env, runtime);
+  } catch {
+    report.errors += 1;
+  }
   try { await recordUsageSample(env, now, current.totalBytes); } catch { report.errors += 1; }
   Object.assign(report, current);
   return report;

@@ -244,6 +244,13 @@ test('public Worker PWA preserves an encrypted File in IndexedDB and offline @re
     await request.delete(`/api/v1/devices/${encodeURIComponent(second.device.id)}`, {
       headers: { Authorization: `Bearer ${first.access_token}` },
     }).catch(() => undefined);
+    await request.delete('/api/v1/account', {
+      headers: {
+        Authorization: `Bearer ${first.access_token}`,
+        'content-type': 'application/json',
+      },
+      data: { confirmation: 'DELETE' },
+    }).catch(() => undefined);
     await contextA.close();
     await contextB.close();
   }

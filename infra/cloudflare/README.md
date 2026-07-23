@@ -77,7 +77,9 @@ npm run cloudflare:remote:e2e
 
 state診断はbackend type、bucket、key、workspace、resource/output名だけを表示し、state本文やsecret値は表示しません。`backend_reachable_state_object_missing`の場合は`terraform apply`へ進まず、Cloudflare実環境との照合とimport計画を先に行ってください。
 
-remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。Cloudflare AccessのService Authを使う場合は`CF-Access-Client-Id`と`CF-Access-Client-Secret`を各HTTPリクエストへ付与する必要があります。テスト用Pushと2台目の端末は終了時に片付けますが、bootstrapした識別可能な`smoke_*`ユーザーと端末AはAPI仕様上残ります。
+remote smokeは`PUSHBRIDGE_REMOTE_ORIGIN`未指定時に`https://pushbridge-dev.mokusatsu.workers.dev`を検証します。Cloudflare AccessのService Authを使う場合は`CF-Access-Client-Id`と`CF-Access-Client-Secret`を各HTTPリクエストへ付与する必要があります。テスト用Push、File、端末、bootstrapアカウントは終了時に`DELETE /v1/account`の再試行可能jobで回収します。
+
+`.github/workflows/remote-smoke.yml`は手動実行専用です。Repository secrets `CF_ACCESS_CLIENT_ID`と`CF_ACCESS_CLIENT_SECRET`だけを実行時環境へ渡し、Terraform資格情報は使用しません。既定ではAPI/D1/private R2/E2EE/realtimeに加えて公開PWAとChromium拡張のbrowser E2Eを実行し、trace、video、screenshot、認証cookieをartifactへ保存しません。
 
 `cloudflare:remote:e2e`は実Chromiumで公開PWA、E2EE、IndexedDB、Service Worker、offline reloadを検証します。Service Worker script取得はservice-tokenヘッダーを継承しないため、実行元IPがAccess allowlist外の場合は`/sw.js`が403になります。Accessを迂回せず、allowlist済み端末から実行してください。
 

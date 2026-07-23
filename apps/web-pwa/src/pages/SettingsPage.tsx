@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { TurnstileWidget } from '@/components/TurnstileWidget';
 import { webPushSupport } from '@/services/webPush';
 import { authenticatePasskey, getPasskeyConfig, passkeysSupported, registerPasskey } from '@/services/passkeys';
-import { ensureDeviceIdentity } from '@/services/deviceIdentity';
+import { clearDeviceIdentity, ensureDeviceIdentity } from '@/services/deviceIdentity';
 import { useAppRuntime, useAppSnapshot } from '@/state/AppContext';
 import type { AuthMode, ClientSettings, PasskeyPublicConfig, WebPushSubscriptionRecord } from '@/types';
 import { formatBytes, formatDateTime } from '@/utils/format';
@@ -52,6 +52,7 @@ export function SettingsPage() {
   const [linkToken, setLinkToken] = useState('');
   const [redeemingLink, setRedeemingLink] = useState(false);
   const [webPushBusy, setWebPushBusy] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const pushSupport = webPushSupport();
   const passkeyBrowserSupported = passkeysSupported();
   const acceptTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
@@ -255,6 +256,26 @@ export function SettingsPage() {
       // Runtime already reports the error.
     } finally {
       setWebPushBusy(false);
+    }
+  };
+
+  const deleteAccount = async () => {
+    const confirmation = window.prompt('サーバー上のPush、File、端末、鍵、Sessionを削除します。続行するには DELETE と入力してください。');
+    if (confirmation !== 'DELETE') return;
+    setDeletingAccount(true);
+    setFormError('');
+    try {
+      await new ApiClient(normalizedSettings()).request('/account', {
+        method: 'DELETE',
+        body: JSON.stringify({ confirmation: 'DELETE' }),
+      });
+      await runtime.clearLocalData();
+      await clearDeviceIdentity();
+      clearClientSettings();
+      window.location.reload();
+    } catch (error) {
+      setFormError(apiErrorMessage(error));
+      setDeletingAccount(false);
     }
   };
 
@@ -509,6 +530,19 @@ export function SettingsPage() {
           <button className="button button-ghost danger-text" type="button" onClick={() => {
             if (window.confirm('Bearer Tokenを含む接続設定を初期化して再読み込みしますか？')) { clearClientSettings(); window.location.reload(); }
           }}>接続設定を初期化</button>
+        </div>
+      </section>
+
+      <section className="section-card danger-zone">
+        <div className="section-heading"><div><span className="page-eyebrow">ACCOUNT</span><h2>アカウント削除</h2></div></div>
+        <p className="muted-copy">サーバー上の暗号文、File、端末、鍵Envelope、Sessionを失効・削除し、この端末のIndexedDBと秘密鍵も消去します。端末内にだけ残っているファイルも失われ、元に戻せません。</p>
+        <div className="settings-actions align-start">
+          <button
+            className="button button-ghost danger-text"
+            type="button"
+            disabled={deletingAccount || form.authMode === 'none'}
+            onClick={() => void deleteAccount()}
+          ><Icon name="delete" size={17} />{deletingAccount ? '削除処理中…' : 'アカウントを完全に削除'}</button>
         </div>
       </section>
     </div>

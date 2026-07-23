@@ -27,6 +27,7 @@ export class UserHub {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/connect") return this.connect(request);
     if (request.method === "POST" && url.pathname === "/tickle") return this.tickle(request);
+    if (request.method === "POST" && url.pathname === "/disconnect") return this.disconnect(request);
     return problem(404, "not_found", "UserHub endpoint not found.", crypto.randomUUID());
   }
 
@@ -119,6 +120,20 @@ export class UserHub {
       sent += 1;
     }
     return json({ accepted: true, sent, disconnected });
+  }
+
+  private disconnect(request: Request): Response {
+    const userId = request.headers.get("x-pushbridge-user-id");
+    if (!userId) return json({ accepted: false }, { status: 400 });
+    let disconnected = 0;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
+      if (attachment?.userId === userId) {
+        socket.close(4401, "account deleted");
+        disconnected += 1;
+      }
+    }
+    return json({ accepted: true, disconnected });
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {

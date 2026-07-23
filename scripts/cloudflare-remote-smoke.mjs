@@ -576,5 +576,10 @@ try {
     if (deviceBId) {
       await request(`/api/v1/devices/${encodeURIComponent(deviceBId)}`, { method: "DELETE", headers: authA }).catch(() => undefined);
     }
+    await request("/api/v1/account", {
+      method: "DELETE",
+      headers: authA,
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    }).catch(() => undefined);
   }
 }

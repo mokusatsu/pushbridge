@@ -13,6 +13,7 @@ from .config import Settings
 from .database import Database
 from .openapi import install_custom_openapi
 from .routers import (
+    account,
     auth_routes,
     devices,
     deliveries,
@@ -141,6 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(system.router)
     app.include_router(auth_routes.router)
+    app.include_router(account.router)
     app.include_router(devices.router)
     app.include_router(pushes.router)
     app.include_router(files.router)

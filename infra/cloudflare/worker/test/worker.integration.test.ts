@@ -1,6 +1,7 @@
 import { env, exports as workerExports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { cleanupExpiredMetadata } from "../src/cleanup";
+import { processAccountDeletionJobs } from "../src/account";
 import { issueDeliveryToken } from "../src/deliveries";
 import { createWorker } from "../src/index";
 import type { Env } from "../src/types";
@@ -1263,5 +1264,141 @@ describe("Worker runtime integration", () => {
     const recovered = await cleanupExpiredMetadata(env, runtime);
     expect(recovered.deletedObjects).toBeGreaterThanOrEqual(1);
     expect((await env.DB.prepare("SELECT state FROM files WHERE id = ?").bind(interrupted.id).first<{ state: string }>())?.state).toBe("expired");
+  });
+
+  it("logically locks an account before deleting its R2 objects and D1 metadata", async () => {
+    const owner = await bootstrap("198.51.100.130");
+    const ready = await createReadyFile(owner.access_token, 17, "account-delete.bin");
+    const missingConfirmation = await call("/api/v1/account", {
+      method: "DELETE",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ confirmation: "delete" }),
+    });
+    expect(missingConfirmation.status).toBe(422);
+
+    const response = await call("/api/v1/account", {
+      method: "DELETE",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    });
+    expect(response.status).toBe(202);
+    const result = await response.json<{ deletion: { id: string; state: string } }>();
+    expect(result.deletion.state).toBe("completed");
+    expect(await env.FILES.get(ready.r2Key)).toBeNull();
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(owner.user.id).first()).toBeNull();
+    expect(await env.DB.prepare("SELECT id FROM files WHERE user_id = ?").bind(owner.user.id).first()).toBeNull();
+    expect((await env.DB.prepare(`SELECT state, r2_objects_found, r2_objects_deleted, last_error_code
+      FROM account_deletion_jobs WHERE id = ?`).bind(result.deletion.id).first<Record<string, unknown>>()))
+      .toEqual({ state: "completed", r2_objects_found: 1, r2_objects_deleted: 1, last_error_code: null });
+    expect((await call("/api/v1/devices", { headers: auth(owner.access_token) })).status).toBe(401);
+  });
+
+  it("keeps a deleted account locked and retries a transient R2 deletion failure", async () => {
+    const owner = await bootstrap("198.51.100.131");
+    const ready = await createReadyFile(owner.access_token, 23, "account-delete-retry.bin");
+    const failingBucket = new Proxy(env.FILES, {
+      get(target, property) {
+        if (property === "delete") return async () => { throw new Error("injected account R2 deletion failure"); };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (request: Request<unknown, any>, workerEnv: Env, ctx: ExecutionContext) => Promise<Response>;
+    const response = await fetchHandler(request("/api/v1/account", {
+      method: "DELETE",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    }), { ...env, FILES: failingBucket } as Env, {} as ExecutionContext);
+    expect(response.status).toBe(202);
+    const result = await response.json<{ deletion: { id: string; state: string } }>();
+    expect(result.deletion.state).toBe("failed");
+    expect(await env.FILES.get(ready.r2Key)).not.toBeNull();
+    expect((await call("/api/v1/devices", { headers: auth(owner.access_token) })).status).toBe(401);
+    expect((await env.DB.prepare("SELECT deleted_at FROM users WHERE id = ?")
+      .bind(owner.user.id).first<{ deleted_at: number }>())?.deleted_at).toBeTypeOf("number");
+
+    const clock = Date.now() + 120_000;
+    await env.DB.prepare("UPDATE account_deletion_jobs SET retry_at = ? WHERE id = ?").bind(clock, result.deletion.id).run();
+    const runtime = { now: () => clock, id: (prefix: string) => unique(prefix), token: () => unique("deletion-token") };
+    expect(await processAccountDeletionJobs(env, runtime, owner.user.id)).toBe(1);
+    expect(await env.FILES.get(ready.r2Key)).toBeNull();
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(owner.user.id).first()).toBeNull();
+    expect((await env.DB.prepare("SELECT state FROM account_deletion_jobs WHERE id = ?")
+      .bind(result.deletion.id).first<{ state: string }>())?.state).toBe("completed");
+  });
+
+  it("continues account R2 deletion with a cursor across 100-object batches", async () => {
+    const owner = await bootstrap("198.51.100.132");
+    const now = Date.now();
+    const statements: D1PreparedStatement[] = [];
+    const keys: string[] = [];
+    for (let index = 0; index < 101; index += 1) {
+      const id = unique(`fil-account-batch-${String(index).padStart(3, "0")}`);
+      const key = `ttl/1d/${owner.user.id}/${id}`;
+      keys.push(key);
+      await env.FILES.put(key, new Uint8Array([index % 256]));
+      statements.push(env.DB.prepare(`INSERT INTO files
+        (id, user_id, r2_key, original_name, content_type, expected_size, actual_size, state,
+          created_at, completed_at, expires_at, alias_expires_at, r2_delete_attempts, e2ee)
+        VALUES (?, ?, ?, 'encrypted.bin', 'application/octet-stream', 1, 1, 'ready', ?, ?, ?, ?, 0, 1)`)
+        .bind(id, owner.user.id, key, now, now, now + 86_400_000, now + 172_800_000));
+    }
+    await env.DB.batch(statements.slice(0, 50));
+    await env.DB.batch(statements.slice(50, 100));
+    await env.DB.batch(statements.slice(100));
+
+    const response = await call("/api/v1/account", {
+      method: "DELETE",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    });
+    const result = await response.json<{ deletion: { id: string; state: string } }>();
+    expect(response.status).toBe(202);
+    expect(result.deletion.state).toBe("pending");
+    expect((await call("/api/v1/devices", { headers: auth(owner.access_token) })).status).toBe(401);
+
+    const runtime = { now: () => now + 1, id: (prefix: string) => unique(prefix), token: () => unique("deletion-token") };
+    expect(await processAccountDeletionJobs(env, runtime, owner.user.id)).toBe(1);
+    const completed = await env.DB.prepare(`SELECT state, r2_objects_found, r2_objects_deleted
+      FROM account_deletion_jobs WHERE id = ?`).bind(result.deletion.id).first<Record<string, unknown>>();
+    expect(completed).toEqual({ state: "completed", r2_objects_found: 101, r2_objects_deleted: 101 });
+    expect(await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(owner.user.id).first()).toBeNull();
+    for (const key of keys) expect(await env.FILES.get(key)).toBeNull();
+  });
+
+  it("stops automatic account deletion retries after twenty failures", async () => {
+    const owner = await bootstrap("198.51.100.133");
+    const ready = await createReadyFile(owner.access_token, 7, "account-delete-exhausted.bin");
+    const failingBucket = new Proxy(env.FILES, {
+      get(target, property) {
+        if (property === "delete") return async () => { throw new Error("persistent R2 deletion failure"); };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (request: Request<unknown, any>, workerEnv: Env, ctx: ExecutionContext) => Promise<Response>;
+    const response = await fetchHandler(request("/api/v1/account", {
+      method: "DELETE",
+      headers: auth(owner.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ confirmation: "DELETE" }),
+    }), { ...env, FILES: failingBucket } as Env, {} as ExecutionContext);
+    const result = await response.json<{ deletion: { id: string } }>();
+    const clock = Date.now() + 120_000;
+    await env.DB.prepare(`UPDATE account_deletion_jobs SET state = 'failed', attempts = 19, retry_at = ?
+      WHERE id = ?`).bind(clock, result.deletion.id).run();
+    const runtime = { now: () => clock, id: (prefix: string) => unique(prefix), token: () => unique("deletion-token") };
+    expect(await processAccountDeletionJobs({ ...env, FILES: failingBucket } as Env, runtime, owner.user.id)).toBe(1);
+    expect((await env.DB.prepare(`SELECT state, attempts, retry_at FROM account_deletion_jobs WHERE id = ?`)
+      .bind(result.deletion.id).first<Record<string, unknown>>()))
+      .toEqual({ state: "manual_intervention", attempts: 20, retry_at: null });
+    expect(await processAccountDeletionJobs(env, runtime, owner.user.id)).toBe(0);
+    expect(await env.FILES.get(ready.r2Key)).not.toBeNull();
+
+    await env.DB.prepare(`UPDATE account_deletion_jobs SET state = 'failed', attempts = 1, retry_at = ?
+      WHERE id = ?`).bind(clock, result.deletion.id).run();
+    expect(await processAccountDeletionJobs(env, runtime, owner.user.id)).toBe(1);
+    expect(await env.FILES.get(ready.r2Key)).toBeNull();
   });
 });

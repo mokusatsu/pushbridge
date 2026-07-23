@@ -479,6 +479,119 @@
         ]
       }
     },
+    "/v1/account": {
+      "delete": {
+        "tags": [
+          "authentication"
+        ],
+        "summary": "Delete the current account",
+        "description": "Immediately revokes account access, then deletes private R2 objects and D1 metadata through a retryable deletion job.",
+        "operationId": "account_delete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirmation"
+                ],
+                "properties": {
+                  "confirmation": {
+                    "type": "string",
+                    "enum": [
+                      "DELETE"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Account access is revoked and physical deletion is complete or queued for retry.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "deletion"
+                  ],
+                  "properties": {
+                    "deletion": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "state",
+                        "requested_at"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "failed",
+                            "manual_intervention",
+                            "completed"
+                          ]
+                        },
+                        "requested_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "completed_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "description": "The exact deletion confirmation was not supplied.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestID"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceBearer": []
+          },
+          {
+            "BrowserCookie": []
+          }
+        ]
+      }
+    },
     "/v1/auth/sessions": {
       "get": {
         "tags": [
