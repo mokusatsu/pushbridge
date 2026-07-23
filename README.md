@@ -9,7 +9,7 @@ Pushbullet型の端末間共有サービスを、まずローカルのWeb/PWAと
 - API正本: `contract/openapi.json`
 - Cloudflare移行先: Workers、D1、R2、Durable Objects、Static Assets
 - Retention: ファイル本体は最大30日、軽量エイリアスは既定180日。容量逼迫時は本体を早期削除し、受信端末はWeb Push／同期時にIndexedDBへ自動保存
-- 実Cloudflare dev環境: Terraform remote stateでWorker、D1、非公開R2、Durable Object、Turnstile、Cron、Static Assets、Accessを管理。dev D1はmigration 0001〜0010、Phase 7 E2EE Worker/PWAを適用済み。Phase 8のone-time WebSocket ticket／DO tickleはlocal実装・検証済みで、migration 0011とWorkerのdev適用待ち
+- 実Cloudflare dev環境: Terraform remote stateでWorker、D1、非公開R2、Durable Object、Turnstile、Cron、Static Assets、Accessを管理。dev D1はmigration 0001〜0011、Phase 8 E2EE/realtime Worker/PWAを適用済み。one-time WebSocket ticket、DO tickle、公開ChromiumのService Worker／IndexedDB／offlineを実測済み
 
 ローカル結合では、Bootstrap、端末取得、Noteの冪等送信、カーソル同期、ファイルの直接PUT/GET、`file_ref`状態再同期、Web Push Subscription upsertを検証します。
 
@@ -64,9 +64,9 @@ Phase 5の実測証跡は`npm run pwa:evidence`で再生成します。現在の
 
 PWAのproduction buildは`infra/cloudflare/app/dist`へ直接生成され、Terraform Worker Static Assets、ローカルWrangler、`serve:local`、Playwrightのすべてが同じ成果物を配信します。
 
-`cloudflare:remote:smoke`はAccess許可済みの実行元から、公開dev Workerに一意なテストユーザーを作成し、端末2台・Bearer認証・P-256 device envelope・暗号化Note/File・冪等性・cursor同期・private R2 byte一致と復号・PWAを検証します。`PUSHBRIDGE_EXPECT_REALTIME=true`ではURLへticketを載せないWebSocket subprotocol方式とDO tickleも検証します。検証用Pushと端末Bは終了時に削除／失効します。
+`cloudflare:remote:smoke`は公開dev Workerに一意なテストユーザーを作成し、端末2台・Bearer認証・P-256 device envelope・暗号化Note/File・冪等性・cursor同期・private R2 byte一致と復号・PWAを検証します。`PUSHBRIDGE_EXPECT_REALTIME=true`ではAccess Service Tokenから短期`CF_Authorization` cookieを取得し、値をログへ出さずURL非露出のWebSocket subprotocolとDO tickleも検証します。検証用Pushと端末Bは終了時に削除／失効します。
 
-`cloudflare:remote:e2e`は公開PWAを実Chromiumで検証します。Cloudflare Access service tokenは通常HTTPには使えますが、Service Worker script取得へ任意ヘッダーを付けられません。このためService Worker・offlineまで通す実行元IPはAccess allowlistにも含まれている必要があります。Playwright trace／screenshot／videoは無効で、Access tokenを成果物へ保存しません。
+`cloudflare:remote:e2e`は公開PWAを実Chromiumで検証します。最初のService Tokenリクエストで得た短期Access cookieをbrowser contextへ保持するため、Service Worker script、WebSocket、offline reloadも同じAccess sessionで検証できます。2026-07-23に暗号化Note/File、IndexedDB、server削除後Blob保持、Service Worker、offline reloadまで合格しました。Playwright trace／screenshot／videoは無効で、Access tokenを成果物へ保存しません。
 
 既に起動中のAPIを使う場合:
 

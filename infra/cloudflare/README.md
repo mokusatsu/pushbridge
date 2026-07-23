@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelope、Durable Object WebSocket tickleを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0010とPhase 7 Worker/PWAを適用済みで、E2EEを必須化しています。Phase 8 realtimeはlocal検証済みで、migration 0011とWorkerのdev適用待ちです。専用R2資格情報によるpresigned URLとCustom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelope、Durable Object WebSocket tickleを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0011とPhase 8 Worker/PWAを適用済みで、E2EEとrealtimeを有効化しています。専用R2資格情報によるpresigned URLとCustom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistとService Tokenで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 

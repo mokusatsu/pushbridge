@@ -433,9 +433,9 @@ variable "turnstile_mode" {
 }
 
 variable "require_e2ee" {
-  description = "Require version 2 encrypted Push payloads and encrypted File uploads. Enable only after the Phase 7 client passes E2E."
+  description = "Require version 2 encrypted Push payloads and encrypted File uploads. Override only for pre-Phase-7 compatibility testing."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "worker_plain_text_vars" {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createECDH, createHash, randomBytes } from "node:crypto";
+import WebSocket from "ws";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -186,6 +187,21 @@ function expectStatus(result, status, label) {
   assert(result.response.status === status, `${label} returned HTTP ${result.response.status}`);
 }
 
+let cachedWebSocketAccessCookie;
+
+async function websocketAccessCookie() {
+  if (!accessClientId || !accessClientSecret) return undefined;
+  if (cachedWebSocketAccessCookie) return cachedWebSocketAccessCookie;
+  const response = await fetch(origin, withAccess({ redirect: "manual" }));
+  const cookie = response.headers.getSetCookie()
+    .map((value) => /^CF_Authorization=([^;]+)/u.exec(value))
+    .find(Boolean);
+  await response.body?.cancel();
+  assert(cookie, "Cloudflare Access service token did not issue a CF_Authorization cookie for realtime WebSocket validation.");
+  cachedWebSocketAccessCookie = `CF_Authorization=${cookie[1]}`;
+  return cachedWebSocketAccessCookie;
+}
+
 function waitForSocketMessage(socket, predicate, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -205,12 +221,17 @@ function waitForSocketMessage(socket, predicate, timeoutMs = 10_000) {
 }
 
 async function openRealtimeSocket(ticket) {
-  const socket = new WebSocket(`${origin.replace(/^http/, "ws")}/realtime`, ["pushbridge.v1", `pushbridge-ticket.${ticket}`]);
+  const accessCookie = await websocketAccessCookie();
+  const socket = new WebSocket(
+    `${origin.replace(/^http/, "ws")}/realtime`,
+    ["pushbridge.v1", `pushbridge-ticket.${ticket}`],
+    accessCookie ? { headers: { Cookie: accessCookie } } : undefined,
+  );
   const connected = waitForSocketMessage(socket, (message) => message.type === "connected");
   await new Promise((resolve, reject) => {
     socket.addEventListener("open", resolve, { once: true });
     socket.addEventListener("error", () => reject(new Error(
-      "Realtime WebSocket connection failed. Cloudflare Access requires this command to run from an allowlisted source IP.",
+      "Realtime WebSocket connection failed after applying the available Cloudflare Access authorization.",
     )), { once: true });
   });
   await connected;

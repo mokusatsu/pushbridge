@@ -15,7 +15,7 @@
 | Phase 5時系列証跡 | 実Chromiumのスクリーンショット5枚、匿名化API method/path/status 71件、IndexedDB状態5時点を自己完結HTMLへ記録。認証情報・body・Web Push endpoint・file bytesなし |
 | RelayMock実HTTP smoke | Note／Link／File／subscriptionを含め合格 |
 | Terraform fmt／validate | Terraform 1.14.3、Cloudflare Provider 5.22.0で合格 |
-| D1 migration 0001〜0010 | Wrangler／Miniflareとremote適用に合格、schema version 10。適用後migration残件なしをremote読取確認 |
+| D1 migration 0001〜0011 | Wrangler／Miniflareとremote適用に合格、schema version 11。適用後migration残件なしをremote読取確認 |
 | Worker Bootstrap／Bearer認証／端末／Note | localとService Auth経由remote smokeで合格 |
 | Worker cursor同期／冪等性 | localとService Auth経由remote smokeで合格 |
 | Worker Static Assets／SPA／Service Worker | localとService Auth経由remote smokeで合格 |
@@ -28,6 +28,7 @@
 | Phase 6〜7 | Passkey/session/device-link/E2EEをWorker 26件、PWA 38件、local Chromiumで確認。remote Service Auth smokeで暗号化Note/File、P-256 envelope、private R2、端末B復号まで合格 |
 | Phase 7 Terraform | 0 add / 1 change / 0 destroy / 0 replaceでWorkerだけをin-place更新。適用後Planは差分なし |
 | Phase 8 local | migration 0011、30秒one-time ticket、URL非露出subprotocol、DO Hibernation tickle、signed cursor、revocation、接続/size/backpressure制限をWorker 33件とlocal Wrangler/Chromiumで確認 |
+| Phase 8 dev | migration 0011とWorkerを0 add / 1 change / 0 destroyで適用。E2EE/realtime/Web Push capabilityはtrue、Service Auth remote smokeで暗号化Note/FileとDO tickle、公開ChromiumでService Worker／IndexedDB／server削除後Blob／offline reloadに合格。適用後Planは差分なし |
 
 2026-07-22の現実行環境はallowlist外であり、通常アクセスは302で保護される。Accessを無効化せず、対象Service TokenだけをTerraform管理の`non_identity`ポリシーで許可し、公開WorkerのPhase 2縦切りを完了した。テストFile/R2/Push/端末Bはsmoke終了時に回収し、残ったfixtureユーザーも直近候補1件に限定してD1からcascade回収、残存0件を確認した。
 
@@ -37,11 +38,11 @@
 | --- | --- |
 | R2 presigned direct upload | 未実装。現在はprivate R2 bindingのserver-ticket PoCで、Capabilitiesは`direct_upload=false` |
 | Worker Web Push配送／受領確認 | source／local test、dev migration、VAPID／data key binding、remote subscription CRUDは合格。実push service配送とPWA終了中cached ACKは未確認 |
-| Worker WebSocket realtime | local実装・E2E合格。remote migration 0011とWorker apply、allowlist済み実行元からのWebSocket実測は承認待ち。REST cursor同期は引き続き正本 |
+| Worker WebSocket realtime | dev適用とremote smoke／公開Chromiumに合格。WebSocketはtickle専用で、REST cursor同期は引き続き正本 |
 | 実ブラウザーFile E2E | local Playwrightで画面・IndexedDB・offline・missed・Service Worker更新と時系列HTMLを自動化済み。dev実Web Pushを受けたPWA終了中の自動保存は未確認 |
 | Passkey／Turnstile／レート制限 | 実装とlocal統合testは合格。Custom Domain／RP ID未決定のためremote Passkeyは意図的に無効 |
-| remote実ブラウザーService Worker | 暗号化Note/File、IndexedDB、server削除後Blob保持まで合格。allowlist外headless環境ではService Workerがservice-token headerを送れず`/sw.js`がAccess 403のため、allowlist済みIPから最終実測が必要 |
+| remote実ブラウザーService Worker | 2026-07-23に暗号化Note/File、IndexedDB、server削除後Blob保持、Service Worker activation、offline reloadまで合格 |
 
 ## 判定
 
-Cloudflare dev環境はD1 schema version 10、Phase 7 E2EE Worker/PWA、Web Push／retention bindingsを適用済みでpost-apply Planは差分なし。公開HTTPとService Auth remote smokeで暗号化Note/File、private R2、端末B復号まで成立した。残る実環境項目はallowlist済みブラウザーからのService Worker/offline、実push service配送、実Cron、Custom Domain上のPasskeyである。
+Cloudflare dev環境はD1 schema version 11、Phase 8 E2EE/realtime Worker/PWA、Web Push／retention bindingsを適用済みでpost-apply Planは差分なし。Service Auth remote smokeと公開Chromiumで暗号化Note/File、private R2、端末B復号、DO tickle、Service Worker／IndexedDB／offlineまで成立した。残る実環境項目は実push service配送、実Cron、Custom Domain上のPasskeyである。
