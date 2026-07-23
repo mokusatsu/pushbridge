@@ -1638,8 +1638,8 @@ async function markDeliveryFailed(env, deliveryId, failureCode, runtime) {
     failure_code = ? WHERE id = ? AND state IN ('pending', 'notified', 'failed_retryable')`).bind(now, now, failureCode.slice(0, 100), deliveryId).run();
 }
 async function listFileDeliveries(env, auth, requestId, fileId) {
-  const owned = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND user_id = ?").bind(fileId, auth.user_id).first();
-  if (!owned) return problem(404, "file_not_found", "File not found.", requestId);
+  const owned2 = await env.DB.prepare("SELECT id FROM files WHERE id = ? AND user_id = ?").bind(fileId, auth.user_id).first();
+  if (!owned2) return problem(404, "file_not_found", "File not found.", requestId);
   const rows = await env.DB.prepare(`SELECT * FROM file_deliveries WHERE file_id = ? AND user_id = ?
     ORDER BY destination_device_id, id`).bind(fileId, auth.user_id).all();
   return json(rows.results.map(deliveryOut), { headers: { "x-request-id": requestId } });
@@ -2597,6 +2597,92 @@ async function putCurrentDeviceKey(request, env, auth, requestId, runtime) {
   return json({ public_key: publicKey, updated: true }, { headers: { "x-request-id": requestId } });
 }
 
+// infra/cloudflare/worker/src/r2-presign.ts
+var encoder2 = new TextEncoder();
+function encode(value) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+function canonicalQuery(values) {
+  return Object.entries(values).map(([key, value]) => [encode(key), encode(value)]).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("&");
+}
+function owned(value) {
+  const copy2 = new Uint8Array(value.byteLength);
+  copy2.set(value);
+  return copy2.buffer;
+}
+async function sha256(value) {
+  const input = typeof value === "string" ? encoder2.encode(value) : value;
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", owned(input)));
+}
+function hex(value) {
+  return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function hmac2(key, value) {
+  const imported = await crypto.subtle.importKey("raw", owned(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", imported, owned(encoder2.encode(value))));
+}
+function required(value, name) {
+  if (!value) throw new Error(`${name} is required for R2 presigning`);
+  return value;
+}
+function directR2Enabled(env) {
+  return env.R2_DIRECT_UPLOAD === "true" && Boolean(env.R2_ACCOUNT_ID && env.R2_BUCKET_NAME && env.R2_S3_ACCESS_KEY_ID && env.R2_S3_SECRET_ACCESS_KEY);
+}
+async function presignR2(env, options) {
+  if (!directR2Enabled(env)) throw new Error("R2 direct upload is not configured");
+  if (!Number.isSafeInteger(options.expiresSeconds) || options.expiresSeconds < 1 || options.expiresSeconds > 900) {
+    throw new Error("R2 presigned URL lifetime must be from 1 through 900 seconds");
+  }
+  const accountId = required(env.R2_ACCOUNT_ID, "R2_ACCOUNT_ID");
+  const bucket = required(env.R2_BUCKET_NAME, "R2_BUCKET_NAME");
+  const accessKeyId = required(env.R2_S3_ACCESS_KEY_ID, "R2_S3_ACCESS_KEY_ID");
+  const secretAccessKey = required(env.R2_S3_SECRET_ACCESS_KEY, "R2_S3_SECRET_ACCESS_KEY");
+  const timestamp = new Date(options.now).toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const date = timestamp.slice(0, 8);
+  const region = "auto";
+  const service = "s3";
+  const scope = `${date}/${region}/${service}/aws4_request`;
+  const host = `${accountId}.r2.cloudflarestorage.com`;
+  const path = `/${encode(bucket)}/${options.key.split("/").map(encode).join("/")}`;
+  const signedHeaderValues = Object.fromEntries(Object.entries({
+    host,
+    ...options.headers ?? {}
+  }).map(([key, value]) => [key.toLowerCase(), value.trim().replace(/\s+/g, " ")]));
+  const signedHeaders = Object.keys(signedHeaderValues).sort().join(";");
+  const query = {
+    ...options.query ?? {},
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${accessKeyId}/${scope}`,
+    "X-Amz-Date": timestamp,
+    "X-Amz-Expires": String(options.expiresSeconds),
+    "X-Amz-SignedHeaders": signedHeaders
+  };
+  const canonicalHeaders = Object.keys(signedHeaderValues).sort().map((key) => `${key}:${signedHeaderValues[key]}
+`).join("");
+  const canonicalRequest = [
+    options.method,
+    path,
+    canonicalQuery(query),
+    canonicalHeaders,
+    signedHeaders,
+    "UNSIGNED-PAYLOAD"
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    timestamp,
+    scope,
+    hex(await sha256(canonicalRequest))
+  ].join("\n");
+  const dateKey = await hmac2(encoder2.encode(`AWS4${secretAccessKey}`), date);
+  const regionKey = await hmac2(dateKey, region);
+  const serviceKey = await hmac2(regionKey, service);
+  const signingKey = await hmac2(serviceKey, "aws4_request");
+  const signature = hex(await hmac2(signingKey, stringToSign));
+  const url = `https://${host}${path}?${canonicalQuery({ ...query, "X-Amz-Signature": signature })}`;
+  const headers = Object.fromEntries(Object.entries(signedHeaderValues).filter(([name]) => name !== "host"));
+  return { url, headers, expiresAt: options.now + options.expiresSeconds * 1e3 };
+}
+
 // infra/cloudflare/worker/src/files.ts
 var MAX_FILE_BYTES = 25 * 1024 * 1024;
 var UPLOAD_TICKET_TTL_MS = 2 * 60 * 1e3;
@@ -2627,6 +2713,11 @@ async function ownedFile(env, userId, fileId) {
 }
 async function touchFilePushes(env, fileId, now) {
   await env.DB.prepare("UPDATE pushes SET modified_at = ? WHERE file_id = ? AND deleted_at IS NULL").bind(now, fileId).run();
+}
+async function directUploadForDevice(env, auth) {
+  if (!directR2Enabled(env)) return false;
+  const device = await env.DB.prepare("SELECT kind FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(auth.device_id, auth.user_id).first();
+  return device?.kind !== "extension";
 }
 function ttlPrefix(seconds) {
   return seconds === 86400 ? "1d" : seconds === 604800 ? "7d" : "30d";
@@ -2659,31 +2750,44 @@ async function initFile(request, env, auth, requestId, runtime) {
     return problem(507, "storage_pressure", "Storage capacity is temporarily unavailable.", requestId);
   }
   const fileId = runtime.id("fil");
-  const ticket = runtime.token();
-  const tokenHash = await sha256Hex(ticket);
   const expiresAt = now + expiresIn * 1e3;
   const reservationExpiresAt = now + UPLOAD_TICKET_TTL_MS;
   const r2Key = `ttl/${ttlPrefix(expiresIn)}/${auth.user_id}/${fileId}/${crypto.randomUUID()}.bin`;
-  await env.DB.batch([
+  const direct = await directUploadForDevice(env, auth);
+  const ticket = direct ? null : runtime.token();
+  const presigned = direct ? await presignR2(env, {
+    method: "PUT",
+    key: r2Key,
+    expiresSeconds: UPLOAD_TICKET_TTL_MS / 1e3,
+    now,
+    headers: {
+      "content-type": "application/octet-stream",
+      "if-none-match": "*"
+    }
+  }) : null;
+  const statements = [
     env.DB.prepare(`INSERT INTO files
       (id, user_id, r2_key, original_name, content_type, expected_size, actual_size, e2ee,
        expected_sha256, actual_sha256, state, created_at, completed_at, expires_at,
        deleted_at, delete_reason, alias_expires_at, upload_reservation_expires_at,
        r2_delete_attempts, r2_delete_retry_at, r2_delete_error_code)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`).bind(fileId, auth.user_id, r2Key, filename, contentType, size, encrypted ? 1 : 0, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt),
-    env.DB.prepare(`INSERT INTO file_tickets
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, ?, ?, 0, NULL, NULL)`).bind(fileId, auth.user_id, r2Key, filename, contentType, size, encrypted ? 1 : 0, expectedHash, now, expiresAt, now + ALIAS_TTL_MS, reservationExpiresAt)
+  ];
+  if (ticket) {
+    statements.push(env.DB.prepare(`INSERT INTO file_tickets
       (token_hash, user_id, file_id, purpose, created_at, expires_at, used_at)
-      VALUES (?, ?, ?, 'upload', ?, ?, NULL)`).bind(tokenHash, auth.user_id, fileId, now, reservationExpiresAt)
-  ]);
+      VALUES (?, ?, ?, 'upload', ?, ?, NULL)`).bind(await sha256Hex(ticket), auth.user_id, fileId, now, reservationExpiresAt));
+  }
+  await env.DB.batch(statements);
   const row = await ownedFile(env, auth.user_id, fileId);
   if (!row) throw new Error("created file is missing");
   const origin = new URL(request.url).origin;
   return json({
     file: fileOut(row),
-    upload_url: `${origin}/mock-storage/uploads/${encodeURIComponent(ticket)}`,
+    upload_url: presigned?.url ?? `${origin}/mock-storage/uploads/${encodeURIComponent(ticket)}`,
     upload_method: "PUT",
     upload_expires_at: iso(reservationExpiresAt),
-    upload_headers: { "content-type": "application/octet-stream" }
+    upload_headers: presigned?.headers ?? { "content-type": "application/octet-stream" }
   }, { status: 201, headers: { "x-request-id": requestId } });
 }
 async function uploadFile(request, env, requestId, ticket, runtime) {
@@ -2718,20 +2822,59 @@ async function uploadFile(request, env, requestId, ticket, runtime) {
   if (!updated) throw new Error("uploaded file is missing");
   return json(fileOut(updated), { headers: { "x-request-id": requestId } });
 }
-async function completeFile(env, auth, requestId, fileId, runtime) {
-  const row = await ownedFile(env, auth.user_id, fileId);
+async function completeFile(request, env, auth, requestId, fileId, runtime) {
+  const rawBody = await request.text();
+  let completionHash = null;
+  if (rawBody) {
+    let body;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return problem(400, "invalid_json", "Request body must be valid JSON.", requestId);
+    }
+    if (Object.keys(body).some((field) => field !== "sha256")) {
+      return problem(422, "unexpected_field", "The file completion request contains an unsupported field.", requestId);
+    }
+    completionHash = typeof body.sha256 === "string" ? body.sha256.toLowerCase() : null;
+    if (!completionHash || !/^[a-f0-9]{64}$/.test(completionHash)) {
+      return problem(422, "invalid_sha256", "sha256 must be a hexadecimal SHA-256 digest.", requestId);
+    }
+  }
+  let row = await ownedFile(env, auth.user_id, fileId);
   if (!row) return problem(404, "file_not_found", "File not found.", requestId);
   if (row.state === "ready") return json(fileOut(row), { headers: { "x-request-id": requestId, "idempotent-replayed": "true" } });
   if (row.expires_at <= runtime.now() || row.state === "expired") return problem(410, "file_expired", "The file has expired.", requestId);
   if (["delete_pending", "deleted"].includes(row.state)) return problem(409, "file_deleted", "A deleted file cannot be completed.", requestId);
+  const direct = row.state === "pending" && directR2Enabled(env);
+  if (row.state === "pending" && direct) {
+    const object = await env.FILES.get(row.r2_key);
+    if (!object) return problem(422, "object_missing", "The uploaded object bytes are missing.", requestId);
+    if (object.size !== row.expected_size) return problem(422, "file_size_mismatch", "Stored size does not match the initialized size.", requestId);
+    const bytes = await object.arrayBuffer();
+    const actualHash = await sha256Hex(new Uint8Array(bytes));
+    const declaredHash = completionHash ?? row.expected_sha256;
+    if (!declaredHash) {
+      return problem(422, "file_checksum_missing", "Direct upload completion requires a SHA-256 digest.", requestId);
+    }
+    if (actualHash !== declaredHash || row.expected_sha256 && actualHash !== row.expected_sha256) {
+      return problem(422, "file_hash_mismatch", "Stored bytes do not match the initialized SHA-256.", requestId);
+    }
+    await env.DB.prepare(`UPDATE files SET actual_size = ?, actual_sha256 = ?, state = 'uploaded',
+      expected_sha256 = COALESCE(expected_sha256, ?), upload_reservation_expires_at = NULL
+      WHERE id = ? AND state = 'pending'`).bind(object.size, actualHash, declaredHash, row.id).run();
+    row = await ownedFile(env, auth.user_id, fileId);
+    if (!row) throw new Error("directly uploaded file is missing");
+  }
   if (row.state !== "uploaded") return problem(409, "file_not_uploaded", "Upload the file bytes before completing the file.", requestId);
-  const object = await env.FILES.get(row.r2_key);
-  if (!object) return problem(422, "object_missing", "The uploaded object bytes are missing.", requestId);
-  const bytes = await object.arrayBuffer();
-  if (bytes.byteLength !== row.expected_size || bytes.byteLength !== row.actual_size) return problem(422, "file_size_mismatch", "Stored size does not match the initialized and uploaded size.", requestId);
-  const actualHash = await sha256Hex(new Uint8Array(bytes));
-  if (actualHash !== row.actual_sha256 || row.expected_sha256 && actualHash !== row.expected_sha256) {
-    return problem(422, "file_hash_mismatch", "Stored bytes do not match the initialized SHA-256.", requestId);
+  if (!direct) {
+    const object = await env.FILES.get(row.r2_key);
+    if (!object) return problem(422, "object_missing", "The uploaded object bytes are missing.", requestId);
+    const bytes = await object.arrayBuffer();
+    if (bytes.byteLength !== row.expected_size || bytes.byteLength !== row.actual_size) return problem(422, "file_size_mismatch", "Stored size does not match the initialized and uploaded size.", requestId);
+    const actualHash = await sha256Hex(new Uint8Array(bytes));
+    if (actualHash !== row.actual_sha256 || row.expected_sha256 && actualHash !== row.expected_sha256) {
+      return problem(422, "file_hash_mismatch", "Stored bytes do not match the initialized SHA-256.", requestId);
+    }
   }
   const now = runtime.now();
   await env.DB.prepare("UPDATE files SET state = 'ready', completed_at = ? WHERE id = ? AND state = 'uploaded'").bind(now, fileId).run();
@@ -2744,10 +2887,10 @@ async function getFile(env, auth, requestId, fileId) {
   const row = await ownedFile(env, auth.user_id, fileId);
   return row ? json(fileOut(row), { headers: { "x-request-id": requestId } }) : problem(404, "file_not_found", "File not found.", requestId);
 }
-async function issueDownloadTicket(env, userId, fileId, origin, runtime) {
+async function issueDownloadTicket(env, userId, fileId, origin, runtime, direct = directR2Enabled(env)) {
   const row = await ownedFile(env, userId, fileId);
   if (!row || row.expires_at <= runtime.now() || row.state !== "ready") return null;
-  const ticket = runtime.token();
+  const ticket = `${direct ? "r2d_" : ""}${runtime.token()}`;
   const now = runtime.now();
   const expiresAt = now + DOWNLOAD_TICKET_TTL_MS;
   await env.DB.prepare(`INSERT INTO file_tickets
@@ -2760,7 +2903,15 @@ async function createDownloadTicket(request, env, auth, requestId, fileId, runti
   if (!row) return problem(404, "file_not_found", "File not found.", requestId);
   if (row.expires_at <= runtime.now() || ["expired", "delete_pending", "deleted"].includes(row.state)) return problem(410, "file_expired", "The file is no longer available for download.", requestId);
   if (row.state !== "ready") return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
-  const ticket = await issueDownloadTicket(env, auth.user_id, fileId, new URL(request.url).origin, runtime);
+  const device = await env.DB.prepare("SELECT kind FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL").bind(auth.device_id, auth.user_id).first();
+  const ticket = await issueDownloadTicket(
+    env,
+    auth.user_id,
+    fileId,
+    new URL(request.url).origin,
+    runtime,
+    directR2Enabled(env) && device?.kind !== "extension"
+  );
   if (!ticket) return problem(409, "file_not_ready", "The file is not available for download yet.", requestId);
   return json({ file_id: fileId, download_url: ticket.downloadUrl, expires_at: iso(ticket.expiresAt) }, {
     headers: { "x-request-id": requestId }
@@ -2774,10 +2925,33 @@ async function downloadFile(env, requestId, ticket, runtime) {
   if (row.ticket_expires_at <= runtime.now()) return problem(410, "download_ticket_expired", "The download ticket has expired.", requestId);
   if (row.ticket_used_at != null) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
   if (row.state !== "ready" || row.expires_at <= runtime.now()) return problem(410, "file_expired", "The file is no longer available.", requestId);
-  const object = await env.FILES.get(row.r2_key);
+  const direct = ticket.startsWith("r2d_") && directR2Enabled(env);
+  const object = direct ? await env.FILES.head(row.r2_key) : await env.FILES.get(row.r2_key);
   if (!object) return problem(410, "object_missing", "The object bytes are missing.", requestId);
   const consumed = await env.DB.prepare("UPDATE file_tickets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL").bind(runtime.now(), await sha256Hex(ticket)).run();
   if (consumed.meta.changes !== 1) return problem(410, "download_ticket_used", "The download ticket has already been used.", requestId);
+  if (direct) {
+    const presigned = await presignR2(env, {
+      method: "GET",
+      key: row.r2_key,
+      expiresSeconds: 30,
+      now: runtime.now(),
+      query: {
+        "response-cache-control": "private, no-store",
+        "response-content-disposition": 'attachment; filename="pushbridge-file.bin"',
+        "response-content-type": "application/octet-stream"
+      }
+    });
+    return new Response(null, {
+      status: 307,
+      headers: {
+        location: presigned.url,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "x-request-id": requestId
+      }
+    });
+  }
   const headers = new Headers({
     "content-type": "application/octet-stream",
     "content-disposition": 'attachment; filename="pushbridge-file.bin"',
@@ -2837,7 +3011,7 @@ async function handlePublicFileRoute(request, env, requestId, path, runtime) {
 async function handleFileRoute(request, env, auth, requestId, path, runtime) {
   if (path === "/v1/files/init" && request.method === "POST") return initFile(request, env, auth, requestId, runtime);
   const completeMatch = path.match(/^\/v1\/files\/([^/]+)\/complete$/);
-  if (completeMatch && request.method === "POST") return completeFile(env, auth, requestId, decodeURIComponent(completeMatch[1]), runtime);
+  if (completeMatch && request.method === "POST") return completeFile(request, env, auth, requestId, decodeURIComponent(completeMatch[1]), runtime);
   const downloadTicketMatch = path.match(/^\/v1\/files\/([^/]+)\/download-ticket$/);
   if (downloadTicketMatch && request.method === "POST") return createDownloadTicket(request, env, auth, requestId, decodeURIComponent(downloadTicketMatch[1]), runtime);
   const metadataMatch = path.match(/^\/v1\/files\/([^/]+)$/);
@@ -2968,7 +3142,7 @@ function trimPadding(input) {
 var isoCBOR_exports = {};
 __export(isoCBOR_exports, {
   decodeFirst: () => decodeFirst,
-  encode: () => encode
+  encode: () => encode2
 });
 
 // node_modules/@levischuck/tiny-cbor/esm/cbor/cbor_internal.js
@@ -3404,7 +3578,7 @@ function decodeFirst(input) {
   const [first] = decoded;
   return first;
 }
-function encode(input) {
+function encode2(input) {
   return encodeCBOR(input);
 }
 
@@ -3694,17 +3868,17 @@ async function verifyRSA(opts) {
 
 // node_modules/@simplewebauthn/server/esm/helpers/convertAAGUIDToString.js
 function convertAAGUIDToString(aaguid) {
-  const hex2 = isoUint8Array_exports.toHex(aaguid);
+  const hex3 = isoUint8Array_exports.toHex(aaguid);
   const segments = [
-    hex2.slice(0, 8),
+    hex3.slice(0, 8),
     // 8
-    hex2.slice(8, 12),
+    hex3.slice(8, 12),
     // 4
-    hex2.slice(12, 16),
+    hex3.slice(12, 16),
     // 4
-    hex2.slice(16, 20),
+    hex3.slice(16, 20),
     // 4
-    hex2.slice(20, 32)
+    hex3.slice(20, 32)
     // 8
   ];
   return segments.join("-");
@@ -5551,8 +5725,8 @@ var Integer = class extends BaseBlock {
     assertBigInt();
     const bigIntValue = BigInt(value);
     const writer = new ViewWriter();
-    const hex2 = bigIntValue.toString(16).replace(/^-/, "");
-    const view = new Uint8Array(pvtsutils.Convert.FromHex(hex2));
+    const hex3 = bigIntValue.toString(16).replace(/^-/, "");
+    const view = new Uint8Array(pvtsutils.Convert.FromHex(hex3));
     if (bigIntValue < 0) {
       const first = new Uint8Array(view.length + (view[0] & 128 ? 1 : 0));
       first[0] |= 128;
@@ -8041,10 +8215,10 @@ function __classPrivateFieldSet(receiver, state, value, kind2, f) {
 var hex_exports = {};
 __export(hex_exports, {
   decode: () => decode,
-  encode: () => encode2,
+  encode: () => encode3,
   format: () => format,
   formats: () => formats,
-  hex: () => hex,
+  hex: () => hex2,
   is: () => is,
   normalize: () => normalize,
   parse: () => parse
@@ -8214,7 +8388,7 @@ function is(text2, options = {}) {
     return false;
   }
 }
-function encode2(data, options = {}) {
+function encode3(data, options = {}) {
   const bytes = toUint8Array(data);
   const casing = options.case ?? "lower";
   const pairs = Array.from(bytes, (byte) => {
@@ -8255,7 +8429,7 @@ function parse(text2, options = {}) {
   };
 }
 function format(data, value) {
-  return encode2(data, value);
+  return encode3(data, value);
 }
 var formats = {
   compact: Object.freeze({}),
@@ -8265,7 +8439,7 @@ var formats = {
   groupsOf4: Object.freeze({ group: { size: 4, separator: " " } }),
   prefixed: Object.freeze({ prefix: "0x" })
 };
-var hex = { encode: encode2, decode, format, formats, is, normalize, parse };
+var hex2 = { encode: encode3, decode, format, formats, is, normalize, parse };
 
 // node_modules/@peculiar/asn1-x509/build/es2015/ip_converter.js
 var IpConverter = class {
@@ -11607,7 +11781,7 @@ var md2 = create2(id_md2);
 var md4 = create2(id_md5);
 var sha1 = create2(id_sha1);
 var sha224 = create2(id_sha224);
-var sha256 = create2(id_sha256);
+var sha2562 = create2(id_sha256);
 var sha384 = create2(id_sha384);
 var sha512 = create2(id_sha512);
 var sha512_224 = create2(id_sha512_224);
@@ -13703,8 +13877,8 @@ var TextConverter = class {
         if (j === 8) {
           row.push("");
         }
-        const hex2 = view[i++].toString(16).padStart(2, "0");
-        row.push(hex2);
+        const hex3 = view[i++].toString(16).padStart(2, "0");
+        row.push(hex3);
       }
       res.push(`${pad}${row.join(" ")}`);
     }
@@ -14128,7 +14302,7 @@ var GeneralName3 = class extends AsnData {
           if (!matches) {
             throw new Error("Cannot parse GUID value. Value doesn't match to regular expression");
           }
-          const hex2 = matches.slice(1).map((o, i) => {
+          const hex3 = matches.slice(1).map((o, i) => {
             if (i < 3) {
               return import_pvtsutils.Convert.ToHex(new Uint8Array(import_pvtsutils.Convert.FromHex(o)).reverse());
             }
@@ -14137,7 +14311,7 @@ var GeneralName3 = class extends AsnData {
           name = new GeneralName({
             otherName: new OtherName({
               typeId: id_GUID,
-              value: AsnConvert.serialize(new OctetString2(import_pvtsutils.Convert.FromHex(hex2)))
+              value: AsnConvert.serialize(new OctetString2(import_pvtsutils.Convert.FromHex(hex3)))
             })
           });
           break;
@@ -17114,15 +17288,15 @@ function toHex(array) {
   const hexParts = Array.from(array, (i) => i.toString(16).padStart(2, "0"));
   return hexParts.join("");
 }
-function fromHex(hex2) {
-  if (!hex2) {
+function fromHex(hex3) {
+  if (!hex3) {
     return Uint8Array.from([]);
   }
-  const isValid = hex2.length !== 0 && hex2.length % 2 === 0 && !/[^a-fA-F0-9]/u.test(hex2);
+  const isValid = hex3.length !== 0 && hex3.length % 2 === 0 && !/[^a-fA-F0-9]/u.test(hex3);
   if (!isValid) {
     throw new Error("Invalid hex string");
   }
-  const byteStrings = hex2.match(/.{1,2}/g) ?? [];
+  const byteStrings = hex3.match(/.{1,2}/g) ?? [];
   return Uint8Array.from(byteStrings.map((byte) => parseInt(byte, 16)));
 }
 function concat3(arrays) {
@@ -17140,8 +17314,8 @@ function toUTF8String2(array) {
   return decoder.decode(array);
 }
 function fromUTF8String2(utf8String) {
-  const encoder4 = new globalThis.TextEncoder();
-  return encoder4.encode(utf8String);
+  const encoder5 = new globalThis.TextEncoder();
+  return encoder5.encode(utf8String);
 }
 function fromASCIIString(value) {
   return Uint8Array.from(value.split("").map((x) => x.charCodeAt(0)));
@@ -19434,8 +19608,8 @@ async function consumeAccountAttempt(env, userId, requestId, runtime) {
   return Number(row?.attempts) > limit ? problem(429, "account_rate_limited", "Too many authentication attempts for this account. Retry later.", requestId, { "retry-after": "600" }) : null;
 }
 async function verifyTurnstile2(body, request, env, requestId) {
-  const required = env.REQUIRE_PASSKEY_TURNSTILE === "true" || env.APP_ENVIRONMENT === "production" && env.REQUIRE_PASSKEY_TURNSTILE !== "false";
-  if (!required) return null;
+  const required2 = env.REQUIRE_PASSKEY_TURNSTILE === "true" || env.APP_ENVIRONMENT === "production" && env.REQUIRE_PASSKEY_TURNSTILE !== "false";
+  if (!required2) return null;
   const token = typeof body.turnstile_token === "string" ? body.turnstile_token : request.headers.get("cf-turnstile-response");
   if (!token || !env.TURNSTILE_SECRET_KEY) return problem(403, "turnstile_required", "A valid Turnstile response is required.", requestId);
   const form = new FormData();
@@ -19702,7 +19876,7 @@ async function revokeBrowserSession(sessionId, env, auth, requestId, runtime) {
 }
 
 // infra/cloudflare/worker/src/web-push.ts
-var encoder2 = new TextEncoder();
+var encoder3 = new TextEncoder();
 var MAX_WEB_PUSH_PLAINTEXT_BYTES = 3993;
 var WEB_PUSH_RECORD_SIZE = 4096;
 var DELIVERY_ATTEMPT_LIMIT = 3;
@@ -19754,11 +19928,11 @@ async function encryptWebPushPayload(plaintext, receiverPublicKey, authenticatio
     applicationKeys.privateKey,
     256
   ));
-  const keyInfo = concatenate(encoder2.encode("WebPush: info\0"), uaPublic, applicationPublic);
+  const keyInfo = concatenate(encoder3.encode("WebPush: info\0"), uaPublic, applicationPublic);
   const inputKeyMaterial = await hkdf(authSecret, sharedSecret, keyInfo, 32);
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const contentEncryptionKey = await hkdf(salt, inputKeyMaterial, encoder2.encode("Content-Encoding: aes128gcm\0"), 16);
-  const nonce = await hkdf(salt, inputKeyMaterial, encoder2.encode("Content-Encoding: nonce\0"), 12);
+  const contentEncryptionKey = await hkdf(salt, inputKeyMaterial, encoder3.encode("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, inputKeyMaterial, encoder3.encode("Content-Encoding: nonce\0"), 12);
   const aesKey2 = await crypto.subtle.importKey("raw", ownedBuffer(contentEncryptionKey), "AES-GCM", false, ["encrypt"]);
   const record = concatenate(plaintext, new Uint8Array([2]));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
@@ -19788,8 +19962,8 @@ async function createVapidAuthorization(endpoint, publicKeyEncoded, privateKeyEn
   if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) throw new Error("VAPID_SUBJECT must be a mailto or HTTPS URI");
   const publicKey = validateWebPushKey("VAPID_PUBLIC_KEY", publicKeyEncoded, 65);
   const privateKey = validateWebPushKey("VAPID_PRIVATE_KEY", privateKeyEncoded, 32);
-  const header = base64UrlEncode(encoder2.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
-  const claims = base64UrlEncode(encoder2.encode(JSON.stringify({
+  const header = base64UrlEncode(encoder3.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claims = base64UrlEncode(encoder3.encode(JSON.stringify({
     aud: endpointUrl.origin,
     exp: Math.floor(now / 1e3) + 12 * 60 * 60,
     sub: subject
@@ -19805,13 +19979,13 @@ async function createVapidAuthorization(endpoint, publicKeyEncoded, privateKeyEn
   const signature = new Uint8Array(await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     signingKey,
-    encoder2.encode(unsigned)
+    encoder3.encode(unsigned)
   ));
   return `vapid t=${unsigned}.${base64UrlEncode(signature)}, k=${publicKeyEncoded}`;
 }
 async function sendWebPush(request, env, now, fetcher = fetch) {
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) throw new Error("VAPID configuration is incomplete");
-  const body = await encryptWebPushPayload(encoder2.encode(JSON.stringify(request.payload)), request.p256dh, request.auth);
+  const body = await encryptWebPushPayload(encoder3.encode(JSON.stringify(request.payload)), request.p256dh, request.auth);
   const authorization = await createVapidAuthorization(
     request.endpoint,
     env.VAPID_PUBLIC_KEY,
@@ -19938,7 +20112,7 @@ async function deliverFilePush(env, pushId, origin, runtime, fetcher = fetch) {
 }
 
 // infra/cloudflare/worker/src/pushes.ts
-var encoder3 = new TextEncoder();
+var encoder4 = new TextEncoder();
 var PUSH_SELECT = `SELECT
   p.*,
   f.state AS file_ref_state,
@@ -20009,7 +20183,7 @@ async function createPush(request, env, auth, requestId, runtime) {
   if (encrypted && (!keyVersion2 || !encryptionSalt || !ciphertext || !nonce || ![encryptionSalt, ciphertext, nonce].every((value) => /^[A-Za-z0-9_-]+$/.test(value)))) {
     return problem(422, "invalid_encrypted_payload", "key_version, encryption_salt, nonce, and ciphertext are required for payload_version 2.", requestId);
   }
-  const encodedSize = encoder3.encode(encrypted ? `${encryptionSalt}.${nonce}.${ciphertext}` : payloadJson ?? "").byteLength;
+  const encodedSize = encoder4.encode(encrypted ? `${encryptionSalt}.${nonce}.${ciphertext}` : payloadJson ?? "").byteLength;
   if (encodedSize > 2e6) return problem(413, "payload_too_large", "Push payload is too large.", requestId);
   if (!encrypted && type === "link") {
     const url = payload.url;
@@ -20268,6 +20442,7 @@ function retention(env) {
   }
 }
 function capabilities(env) {
+  const directUpload = directR2Enabled(env);
   const policy = retention(env);
   const defaultSeconds = Number(policy.default ?? policy.default_seconds ?? policy.default_days * 86400) || 2592e3;
   return {
@@ -20278,7 +20453,7 @@ function capabilities(env) {
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: env.REQUIRE_E2EE === "true",
-      direct_upload: false,
+      direct_upload: directUpload,
       device_registration: true,
       passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
       browser_cookie_sessions: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
@@ -20294,7 +20469,10 @@ function capabilities(env) {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15552e3,
       max_devices: 10
     },
-    transports: { realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"], upload: ["server-ticket"] },
+    transports: {
+      realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"],
+      upload: directUpload ? ["presigned-url", "server-ticket"] : ["server-ticket"]
+    },
     recommended_poll_interval_seconds: 30
   };
 }

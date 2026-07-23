@@ -10,7 +10,7 @@
 | RelayMock pytest | 26件合格 |
 | OpenAPI正本／RelayMock／PWAコピー | 一致 |
 | PWA OpenAPI契約検査／TypeScript／production build | 合格 |
-| PWA Vitest | 42件合格（サーバー削除後のIndexedDB Blob維持、E2EE固定vector、AAD改変、wrong key、nonce再利用防止、危険URL非リンク化、Realtime backoff/jitterを含む） |
+| PWA Vitest | 43件合格（サーバー削除後のIndexedDB Blob維持、E2EE固定vector、AAD改変、wrong key、nonce再利用防止、危険URL非リンク化、Realtime backoff/jitter、R2送信先制限を含む） |
 | Playwright実ブラウザー | Chromium desktop 3件／mobile 1件合格、Passkey 1件は専用テストへ分離。二端末Note／Link／File、account deletion、IndexedDB、server削除後offline reload、missed、Service Worker実更新、通知拒否、keyboard／ARIA／reduced-motionを検証 |
 | Phase 5時系列証跡 | 実Chromiumのスクリーンショット5枚、匿名化API method/path/status 71件、IndexedDB状態5時点を自己完結HTMLへ記録。認証情報・body・Web Push endpoint・file bytesなし |
 | RelayMock実HTTP smoke | Note／Link／File／subscriptionを含め合格 |
@@ -34,6 +34,8 @@
 | Account deletion local/dev | migration 0012、即時account/session/device/token/subscription失効、DO WebSocket切断、R2 100件cursor削除、D1物理削除、指数backoff、20回後manual intervention、PWA秘密鍵／IndexedDB消去、RelayMockを実装。Worker 37件、RelayMock 26件、PWA 41件、実Chromium account deletion、fresh D1 local E2Eに合格。devへ0012とWorker/PWAを適用し、remote smokeで削除完了と端末A/B両tokenの401失効を確認。post-apply Planは差分なし |
 | 実Web Push closed-PWA E2E | インストール済みEdgeの実PushManager subscriptionを使用。PWAウィンドウを閉じた状態で暗号化Fileを受信し、Service Worker復号、IndexedDB commit後のcached ACK、サーバー削除後のoffline Blob保持を確認。subscription解除、テストaccount完全削除、一時profile削除まで合格 |
 | 実Cron | Cloudflare GraphQLの`workersInvocationsScheduled`専用datasetで、`17 3 * * *`のscheduled invocationを確認。2026-07-22と2026-07-23はいずれもstatus `success`、実CPU時間あり。D1の間接的なusage行ではなくCloudflare側の発火記録 |
+| bounded remote load | 固定IPv4からService Tokenなし、concurrency 10で同一Idempotency-Keyを50並行再送し一意Push 1件。health 100回はp95 59ms、認証cursor 100回はp95 238ms、全251 requestでerror 0。合成account完全削除とtoken 401まで確認 |
+| R2 direct adapter dormant deploy | SigV4固定vector、署名済み`If-None-Match: *`、R2 hostname制限、認証済みcomplete hash／実bytes照合、30秒GET交換、拡張機能server-ticket fallbackをWorker 40件／PWA 43件で確認。専用資格情報なしのため`direct_upload=false`のままWorker/PWAを0 add / 1 change / 0 destroyでdevへ適用し、remote smokeとPlaywrightが合格。適用後Planは差分なし |
 | D1 recovery drill | migration 0001〜0012を適用した隔離ローカルD1に合成user/device/暗号文Pushを作成し、Wrangler exportから別D1へrestore。schema version 12、各件数、暗号文一致、account deletion tableを検証し、一時成果物の削除まで合格 |
 | Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。GitHub上の実行はbranch push後に未確認 |
 
@@ -43,13 +45,14 @@
 
 | 対象 | 状態 |
 | --- | --- |
-| R2 presigned direct upload | 未実装。現在はprivate R2 bindingのserver-ticket PoCで、Capabilitiesは`direct_upload=false` |
+| R2 presigned direct upload | adapterはdevへdormant適用済み。専用R2 S3資格情報の設定、`direct_upload=true`の再適用、実R2 presigned PUT／GET E2Eが必要 |
 | Worker Web Push配送／受領確認 | source／local test、dev migration、VAPID／data key binding、remote subscription CRUD、実Edge push service配送、PWA終了中IndexedDB commit後cached ACKまで合格 |
 | Worker WebSocket realtime | dev適用とremote smoke／公開Chromiumに合格。WebSocketはtickle専用で、REST cursor同期は引き続き正本 |
 | 実ブラウザーFile E2E | local Playwrightで画面・IndexedDB・offline・missed・Service Worker更新と時系列HTMLを自動化済み。dev実Web Pushを受けたPWA終了中の自動保存とサーバー削除後offline Blob保持も実Edgeで合格 |
 | Passkey／Turnstile／レート制限 | 実装とlocal統合testは合格。Custom Domain／RP ID未決定のためremote Passkeyは意図的に無効 |
 | remote実ブラウザーService Worker | 2026-07-23に暗号化Note/File、IndexedDB、server削除後Blob保持、Service Worker activation、offline reloadまで合格 |
+| 監視通知の配送先 | 毎時synthetic workflowとoptional Cloudflare incident／Service Token期限notificationをIaC化。通知メールとGitHub Actions secretsはrepositoryへ設定後に実行確認が必要 |
 
 ## 判定
 
-Cloudflare dev環境はD1 schema version 12、Phase 9 E2EE/realtime/account deletion Worker/PWA、Web Push／retention bindingsを適用済みでpost-apply Planは差分なし。Service Auth remote smokeと実ブラウザーで暗号化Note/File、private R2、端末B復号、DO tickle、Service Worker／IndexedDB／offline、closed-PWA実Web Push、アカウント完全削除と両端末token失効まで成立した。Cloudflare Scheduled datasetでも実Cron成功を確認した。残る実環境項目はCustom Domain上のPasskeyである。
+Cloudflare dev環境はD1 schema version 12、Phase 9 E2EE/realtime/account deletion Worker/PWA、Web Push／retention bindingsを適用済みで、Service Auth remote smokeと実ブラウザーで暗号化Note/File、private R2、端末B復号、DO tickle、Service Worker／IndexedDB／offline、closed-PWA実Web Push、アカウント完全削除と両端末token失効まで成立した。Cloudflare Scheduled datasetでも実Cron成功を確認した。残る実環境項目は専用R2 S3資格情報を使うdirect uploadのdev E2E、通知配送先／GitHub secrets、Custom Domain上のPasskeyである。

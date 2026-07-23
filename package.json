@@ -21,6 +21,7 @@
     "cloudflare:wrangler:render": "node infra/cloudflare/scripts/render-wrangler-config.mjs",
     "cloudflare:web-push:generate": "node infra/cloudflare/scripts/generate-web-push-credentials.mjs",
     "cloudflare:web-push:render": "node infra/cloudflare/scripts/render-web-push-tfvars.mjs",
+    "cloudflare:r2-direct:render": "node infra/cloudflare/scripts/render-r2-direct-tfvars.mjs",
     "cloudflare:local:migrate": "npx --yes wrangler@4 d1 migrations apply DB --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler",
     "cloudflare:local:dev": "npx --yes wrangler@4 dev --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler --ip 127.0.0.1 --port 8787",
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",
@@ -30,6 +31,8 @@
     "cloudflare:remote:web-push-e2e": "node scripts/cloudflare-web-push-e2e.mjs",
     "cloudflare:remote:cron-evidence": "node scripts/cloudflare-cron-evidence.mjs",
     "cloudflare:remote:metrics-evidence": "node scripts/cloudflare-metrics-evidence.mjs",
+    "cloudflare:remote:load-evidence": "node scripts/cloudflare-load-evidence.mjs",
+    "cloudflare:remote:monitor": "node scripts/cloudflare-synthetic-monitor.mjs",
     "cloudflare:remote:e2e": "npm run --prefix apps/web-pwa test:e2e:remote",
     "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"
   },

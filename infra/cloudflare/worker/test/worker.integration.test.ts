@@ -1061,6 +1061,118 @@ describe("Worker runtime integration", () => {
     }
   }, 60_000);
 
+  it("issues overwrite-safe R2 presigned URLs and verifies direct-upload bytes", async () => {
+    const session = await bootstrap("198.51.100.115");
+    const handler = createWorker();
+    const fetchHandler = handler.fetch as unknown as (
+      request: Request<unknown, any>,
+      workerEnv: Env,
+      ctx: ExecutionContext,
+    ) => Promise<Response>;
+    const directEnv: Env = {
+      ...env,
+      R2_DIRECT_UPLOAD: "true",
+      R2_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+      R2_BUCKET_NAME: "pushbridge-local-files",
+      R2_S3_ACCESS_KEY_ID: "R2TESTACCESSKEY123456",
+      R2_S3_SECRET_ACCESS_KEY: "r2-test-secret-access-key-0123456789abcdef",
+    };
+    const directCall = (path: string, init: RequestInit = {}) => fetchHandler(
+      request(path, init),
+      directEnv,
+      {} as ExecutionContext,
+    );
+    const bytes = new Uint8Array([1, 3, 3, 7]);
+    const expectedHash = await digestHex(bytes);
+    const initializedResponse = await directCall("/api/v1/files/init", {
+      method: "POST",
+      headers: auth(session.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({
+        filename: "direct.bin",
+        content_type: "application/octet-stream",
+        size: bytes.byteLength,
+        sha256: expectedHash,
+        expires_in: 86_400,
+      }),
+    });
+    expect(initializedResponse.status).toBe(201);
+    const initialized = await initializedResponse.json<FileInitResult & { upload_headers: Record<string, string> }>();
+    const uploadUrl = new URL(initialized.upload_url);
+    expect(uploadUrl.hostname).toBe("0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com");
+    expect(uploadUrl.searchParams.get("X-Amz-SignedHeaders")).toBe("content-type;host;if-none-match");
+    expect(initialized.upload_headers).toEqual({
+      "content-type": "application/octet-stream",
+      "if-none-match": "*",
+    });
+    expect((await directCall(`/api/v1/files/${initialized.file.id}/complete`, {
+      method: "POST",
+      headers: auth(session.access_token),
+    })).status).toBe(422);
+
+    const ledger = await env.DB.prepare("SELECT r2_key FROM files WHERE id = ?")
+      .bind(initialized.file.id).first<{ r2_key: string }>();
+    await env.FILES.put(ledger!.r2_key, bytes);
+    const completed = await directCall(`/api/v1/files/${initialized.file.id}/complete`, {
+      method: "POST",
+      headers: auth(session.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ sha256: expectedHash }),
+    });
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({ state: "ready", actual_sha256: expectedHash });
+
+    const capabilities = await (await directCall("/api/v1/system/capabilities")).json<{
+      features: { direct_upload: boolean };
+      transports: { upload: string[] };
+    }>();
+    expect(capabilities.features.direct_upload).toBe(true);
+    expect(capabilities.transports.upload).toEqual(["presigned-url", "server-ticket"]);
+
+    const extension = await (await directCall("/api/v1/devices/link", {
+      method: "POST",
+      headers: auth(session.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({ name: "Direct-mode extension", kind: "browser_extension", public_key: DEVICE_PUBLIC_KEY }),
+    })).json<{ access_token: string }>();
+    const extensionBytes = new Uint8Array([9]);
+    const extensionInitResponse = await directCall("/api/v1/files/init", {
+      method: "POST",
+      headers: auth(extension.access_token, { "content-type": "application/json" }),
+      body: JSON.stringify({
+        filename: "extension.bin",
+        content_type: "application/octet-stream",
+        size: extensionBytes.byteLength,
+        sha256: await digestHex(extensionBytes),
+        expires_in: 86_400,
+      }),
+    });
+    const extensionInit = await extensionInitResponse.json<FileInitResult>();
+    expect(new URL(extensionInit.upload_url).origin).toBe("https://worker.test");
+    expect((await uploadFile(extensionInit.upload_url, extensionBytes)).status).toBe(200);
+    expect((await directCall(`/api/v1/files/${extensionInit.file.id}/complete`, {
+      method: "POST",
+      headers: auth(extension.access_token),
+    })).status).toBe(200);
+    expect((await directCall(`/api/v1/files/${extensionInit.file.id}`, {
+      method: "DELETE",
+      headers: auth(extension.access_token),
+    })).status).toBe(200);
+
+    const ticket = await (await directCall(`/api/v1/files/${initialized.file.id}/download-ticket`, {
+      method: "POST",
+      headers: auth(session.access_token),
+    })).json<{ download_url: string }>();
+    const redirect = await directCall(new URL(ticket.download_url).pathname);
+    expect(redirect.status).toBe(307);
+    const location = new URL(redirect.headers.get("location")!);
+    expect(location.hostname).toBe("0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com");
+    expect(location.searchParams.get("X-Amz-Expires")).toBe("30");
+    expect((await directCall(new URL(ticket.download_url).pathname)).status).toBe(410);
+
+    expect((await directCall(`/api/v1/files/${initialized.file.id}`, {
+      method: "DELETE",
+      headers: auth(session.access_token),
+    })).status).toBe(200);
+  });
+
   it("rejects oversized, mismatched, caller-supplied-key, expired, and cross-user file operations", async () => {
     const owner = await bootstrap("198.51.100.112");
     const other = await bootstrap("198.51.100.113");

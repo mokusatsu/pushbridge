@@ -420,7 +420,7 @@ export class AppRuntime {
               signal: controller.signal,
               onProgress: (loaded, total) => this.updateUploadProgress(job.id, loaded, total),
             });
-            const uploaded = await this.api.completeFile(init.file_id);
+            const uploaded = await this.api.completeFile(init.file_id, await sha256Hex(uploadBlob));
             job = { ...job, uploaded_file: uploaded, upload_progress: 100, updated_at: nowIso() };
             await this.db.putOutbox(job, false);
           } finally {

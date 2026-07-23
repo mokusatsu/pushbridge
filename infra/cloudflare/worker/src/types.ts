@@ -27,6 +27,11 @@ export interface Env {
   STORAGE_PRESSURE_HIGH_PERCENT?: string;
   STORAGE_CLEANUP_TARGET_PERCENT?: string;
   STORAGE_MONTHLY_BYTE_DAY_BUDGET?: string;
+  R2_ACCOUNT_ID?: string;
+  R2_BUCKET_NAME?: string;
+  R2_DIRECT_UPLOAD?: string;
+  R2_S3_ACCESS_KEY_ID?: string;
+  R2_S3_SECRET_ACCESS_KEY?: string;
   TEST_MIGRATIONS?: Array<{ name: string; queries: string[] }>;
 }
 

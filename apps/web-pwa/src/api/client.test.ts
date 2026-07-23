@@ -126,6 +126,44 @@ describe('ApiClient', () => {
     expect(progress).toHaveBeenLastCalledWith(4, 4);
   });
 
+  it('adds a checksum to a trusted R2 presigned upload and rejects other cross-origin targets', async () => {
+    const headers = new Map<string, string>();
+    class DirectUpload {
+      status = 200;
+      responseText = '';
+      upload = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      timeout = 0;
+      withCredentials = false;
+      open() {}
+      setRequestHeader(name: string, value: string) { headers.set(name.toLowerCase(), value); }
+      getResponseHeader() { return null; }
+      abort() { this.onabort?.(); }
+      send() { this.onload?.(); }
+    }
+    vi.stubGlobal('XMLHttpRequest', DirectUpload);
+    const signedUrl = 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/key'
+      + '?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc';
+    await new ApiClient(settings).upload({
+      method: 'PUT',
+      url: signedUrl,
+      headers: { 'content-type': 'application/octet-stream' },
+      expires_at: '2026-01-01T00:01:00Z',
+    }, new Blob(['data']));
+    expect(headers.get('content-type')).toBe('application/octet-stream');
+    expect(headers.has('x-amz-meta-sha256')).toBe(false);
+
+    await expect(new ApiClient(settings).upload({
+      method: 'PUT',
+      url: 'https://example.invalid/exfiltrate',
+      headers: {},
+      expires_at: '2026-01-01T00:01:00Z',
+    }, new Blob(['data']))).rejects.toMatchObject({ code: 'untrusted_upload_target' });
+  });
+
   it('turns an explicit upload abort into a retryable user action instead of a timeout', async () => {
     class CancelledUpload {
       status = 0;

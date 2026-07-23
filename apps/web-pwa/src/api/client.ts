@@ -5,6 +5,13 @@ import { ApiError, parseApiProblem } from './errors';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const TRANSFER_TIMEOUT_MS = 120_000;
 
+function isPresignedR2Target(target: URL): boolean {
+  return target.protocol === 'https:'
+    && /^[a-f0-9]{32}\.r2\.cloudflarestorage\.com$/u.test(target.hostname)
+    && target.searchParams.get('X-Amz-Algorithm') === 'AWS4-HMAC-SHA256'
+    && Boolean(target.searchParams.get('X-Amz-Signature'));
+}
+
 export interface UploadOptions {
   signal?: AbortSignal;
   onProgress?: (loaded: number, total: number) => void;
@@ -112,6 +119,14 @@ export class ApiClient {
     const url = this.resolveExternalUrl(instruction.url);
     const target = new URL(url, window.location.href);
     const sameOrigin = target.origin === window.location.origin;
+    const directR2 = isPresignedR2Target(target);
+    if (!sameOrigin && !directR2) {
+      throw new ApiError('信頼されていないファイルアップロード先を拒否しました。', {
+        status: 0,
+        code: 'untrusted_upload_target',
+      });
+    }
+    const uploadHeaders = { ...instruction.headers };
 
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -124,7 +139,7 @@ export class ApiClient {
       xhr.open(instruction.method, url, true);
       xhr.withCredentials = sameOrigin;
       xhr.timeout = TRANSFER_TIMEOUT_MS;
-      for (const [name, value] of Object.entries(instruction.headers)) xhr.setRequestHeader(name, value);
+      for (const [name, value] of Object.entries(uploadHeaders)) xhr.setRequestHeader(name, value);
       xhr.upload.onprogress = (event) => {
         const total = event.lengthComputable && event.total > 0 ? event.total : blob.size;
         options.onProgress?.(Math.min(event.loaded, total), total);

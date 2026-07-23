@@ -377,9 +377,10 @@ export class LocalApi {
     return sessionRotationSchema.parse(await this.client.request('/auth/session/rotate', { method: 'POST' }));
   }
 
-  async completeFile(fileId: string): Promise<FileAttachment> {
+  async completeFile(fileId: string, sha256?: string): Promise<FileAttachment> {
     const file = fileCompleteResponseSchema.parse(await this.client.request(`${endpoints.files}/${encodeURIComponent(fileId)}/complete`, {
       method: 'POST',
+      ...(sha256 ? { body: JSON.stringify({ sha256 }) } : {}),
     }));
     this.fileCache.set(file.id, file);
     return file;

@@ -216,6 +216,18 @@ variable "access_service_token_ids" {
   }
 }
 
+variable "notification_email" {
+  description = "Optional operator email for Cloudflare incident and Access Service Token expiration notifications."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.notification_email == null || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.notification_email))
+    error_message = "notification_email must be null or a valid email address."
+  }
+}
+
 variable "custom_domain" {
   description = "Optional Worker custom domain. Supply either zone_id or zone_name."
   type = object({
@@ -324,6 +336,37 @@ variable "r2_jurisdiction" {
   validation {
     condition     = contains(["default", "eu", "fedramp"], var.r2_jurisdiction)
     error_message = "r2_jurisdiction must be default, eu, or fedramp."
+  }
+}
+
+variable "r2_s3_access_key_id" {
+  description = "Dedicated least-privilege R2 S3 Access Key ID used only to create browser presigned URLs."
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+
+  validation {
+    condition     = var.r2_s3_access_key_id == null || length(var.r2_s3_access_key_id) >= 16
+    error_message = "r2_s3_access_key_id must be null or a non-empty dedicated R2 Access Key ID."
+  }
+}
+
+variable "r2_s3_secret_access_key" {
+  description = "Dedicated least-privilege R2 S3 Secret Access Key used only to create browser presigned URLs."
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+
+  validation {
+    condition     = var.r2_s3_secret_access_key == null || length(var.r2_s3_secret_access_key) >= 32
+    error_message = "r2_s3_secret_access_key must be null or a non-empty dedicated R2 Secret Access Key."
+  }
+
+  validation {
+    condition     = (var.r2_s3_access_key_id == null) == (var.r2_s3_secret_access_key == null)
+    error_message = "r2_s3_access_key_id and r2_s3_secret_access_key must be set together."
   }
 }
 

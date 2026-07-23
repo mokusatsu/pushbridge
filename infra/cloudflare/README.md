@@ -11,7 +11,7 @@ Pushbullet相当サービスの低コスト基盤をCloudflareへ構築するTer
 - workers.dev公開と、任意のCustom Domain
 - 任意のCloudflare QueueおよびDead Letter Queue
 
-同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelope、Durable Object WebSocket tickleを実装済みです。Fileは非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使い、Capabilitiesは`direct_upload=false`と`transports.upload=["server-ticket"]`を返します。devはmigration 0001〜0011とPhase 8 Worker/PWAを適用済みで、E2EEとrealtimeを有効化しています。専用R2資格情報によるpresigned URLとCustom Domain上のPasskey有効化は未実装／未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistとService Tokenで保護します。
+同梱Workerはdev限定bootstrap、Bearer認証、端末管理、Note／Link／File、cursor同期、pin／dismiss／delete、storage usage、Web Push、Passkey session、device link、E2EE envelope、Durable Object WebSocket tickleを実装済みです。Fileは専用R2 S3資格情報があるPWAではpresigned URLを、資格情報がない環境とChromium拡張では非公開R2 bindingを経由する一回限りの短寿命server-ticket adapterを使います。devはmigration 0001〜0012とPhase 9 Worker/PWAを適用済みで、E2EEとrealtimeを有効化しています。Custom Domain上のPasskeyは未設定です。devホスト全体はCloudflare Accessの送信元IP allowlistとService Tokenで保護します。
 
 Workerの正本は`worker/src/`のTypeScriptです。`npm run worker:build`がTerraformとWranglerの入力となる`worker/index.mjs`を生成します。外部source mapはローカル診断用に生成しますがGitやTerraform uploadには含めません。production logはrequest IDとエラー種別だけを記録し、title、body、URL、ファイル名、tokenを出力しません。
 
@@ -132,6 +132,13 @@ access_service_token_ids = ["00000000-0000-0000-0000-000000000000"]
 ```
 
 Client IDとClient SecretはTerraformへ渡さず、実行時に`CF-Access-Client-Id`／`CF-Access-Client-Secret`ヘッダーとして送ります。リポジトリのremote smokeには標準環境変数`CF_ACCESS_CLIENT_ID`／`CF_ACCESS_CLIENT_SECRET`で渡せます。
+
+Cloudflare全体のincidentとAccess Service Token期限をemail通知する場合は、運用者が
+確定した配送先だけを未追跡tfvarsへ設定します。`null`では通知ポリシーを作りません。
+
+```hcl
+notification_email = "operator@example.com"
+```
 
 ## 主な変数
 
@@ -286,9 +293,15 @@ migrations = {
 
 ## R2 presigned URLの資格情報
 
-このスタックはR2バケット、CORS、Lifecycle、Worker bindingを作成しますが、S3互換presigned URL用のR2 Access Key ID / Secret Access Keyは作成しません。アプリWorkerから署名URLを発行する場合は、専用の最小権限R2 API Tokenを別途作成し、その資格情報を保護された`worker_secrets`またはCloudflare Secrets Storeへ登録してください。
+このスタックはR2バケット、CORS、Lifecycle、Worker bindingを作成しますが、S3互換presigned URL用のR2 Access Key ID / Secret Access Keyは作成しません。専用のObject Read & Write資格情報を`env.txt`の`R2_S3_ACCESS_KEY_ID`と`R2_S3_SECRET_ACCESS_KEY`へ保存し、次でignored tfvarsを生成します。Terraform backend用`AWS_*`資格情報の再利用はスクリプトが拒否します。
 
-資格情報が未準備の開発段階では、WorkerのR2 bindingを使った小容量アップロードで動作確認し、本番化前にブラウザからR2へ直接送る方式へ切り替えます。
+```bash
+npm run cloudflare:r2-direct:render
+```
+
+両方が設定されたときだけPWAの`direct_upload` capabilityを有効化します。PUT URLは2分で失効し、署名済み`If-None-Match: *`で同じobject keyの上書きを拒否します。ブラウザーは暗号文SHA-256を認証済みcomplete APIへ渡し、Workerが最大25 MiBの実オブジェクトと初期化時hashを照合します。download ticketはWorker側で一回だけ交換でき、交換後は30秒のR2 GET bearer URLへ307します。presigned URL自体は失効まで再利用可能なので、ログや成果物へ保存しません。
+
+Chromium拡張は最小host permissionを保つためserver-ticketを継続します。資格情報が未準備なら全クライアントがserver-ticketへ自動fallbackし、`direct_upload=false`を返します。
 
 ## 更新とDrift
 

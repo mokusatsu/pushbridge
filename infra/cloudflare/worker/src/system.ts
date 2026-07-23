@@ -1,4 +1,5 @@
 import type { Env } from "./types";
+import { directR2Enabled } from "./r2-presign";
 import { webPushDeliveryConfigured } from "./web-push";
 
 export function retention(env: Env): Record<string, number> {
@@ -10,6 +11,7 @@ export function retention(env: Env): Record<string, number> {
 }
 
 export function capabilities(env: Env): Record<string, unknown> {
+  const directUpload = directR2Enabled(env);
   const policy = retention(env);
   const defaultSeconds = Number(policy.default ?? policy.default_seconds ?? policy.default_days * 86400) || 2_592_000;
   return {
@@ -20,7 +22,7 @@ export function capabilities(env: Env): Record<string, unknown> {
       web_push_delivery: webPushDeliveryConfigured(env),
       web_push_subscription_registration: Boolean(env.VAPID_PUBLIC_KEY && env.WEB_PUSH_DATA_KEY),
       e2ee: env.REQUIRE_E2EE === "true",
-      direct_upload: false,
+      direct_upload: directUpload,
       device_registration: true,
       passkey_authentication: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
       browser_cookie_sessions: Boolean(env.PASSKEY_RP_ID && env.PASSKEY_EXPECTED_ORIGINS),
@@ -36,7 +38,10 @@ export function capabilities(env: Env): Record<string, unknown> {
       file_alias_ttl_seconds: Number(policy.alias_days) * 86400 || 15_552_000,
       max_devices: 10,
     },
-    transports: { realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"], upload: ["server-ticket"] },
+    transports: {
+      realtime: env.USER_HUB ? ["websocket", "poll"] : ["poll"],
+      upload: directUpload ? ["presigned-url", "server-ticket"] : ["server-ticket"],
+    },
     recommended_poll_interval_seconds: 30,
   };
 }

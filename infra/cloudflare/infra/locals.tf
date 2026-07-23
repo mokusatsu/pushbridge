@@ -13,6 +13,8 @@ locals {
 
   custom_hostname = var.custom_domain == null ? null : var.custom_domain.hostname
   custom_origin   = local.custom_hostname == null ? null : "https://${local.custom_hostname}"
+  access_origin   = var.access_ip_allowlist == null ? null : "https://${var.access_ip_allowlist.hostname}"
+  r2_direct       = var.r2_s3_access_key_id != null && var.r2_s3_secret_access_key != null
 
   app_hostnames = sort(distinct(compact(concat(
     var.additional_app_hostnames,
@@ -21,7 +23,7 @@ locals {
 
   r2_cors_origins = distinct(compact(concat(
     var.cors_allowed_origins,
-    [local.custom_origin]
+    [local.custom_origin, local.access_origin]
   )))
 
   reserved_plain_text_vars = {
@@ -30,7 +32,9 @@ locals {
     ENABLE_DEV_BOOTSTRAP            = tostring(var.enable_dev_bootstrap)
     REQUIRE_DEV_BOOTSTRAP_TURNSTILE = tostring(var.require_dev_bootstrap_turnstile)
     DEV_BOOTSTRAP_RATE_LIMIT        = tostring(var.dev_bootstrap_rate_limit)
+    R2_ACCOUNT_ID                   = var.account_id
     R2_BUCKET_NAME                  = local.r2_name
+    R2_DIRECT_UPLOAD                = tostring(local.r2_direct)
     TURNSTILE_SITE_KEY              = cloudflare_turnstile_widget.registration.sitekey
     FILE_RETENTION_POLICY           = jsonencode(var.file_retention_seconds)
     STORAGE_BUDGET_BYTES            = tostring(var.storage_budget_bytes)
@@ -74,6 +78,10 @@ locals {
   worker_secret_values = merge(
     var.worker_secrets,
     local.web_push_secret_values,
+    local.r2_direct ? {
+      R2_S3_ACCESS_KEY_ID     = var.r2_s3_access_key_id
+      R2_S3_SECRET_ACCESS_KEY = var.r2_s3_secret_access_key
+    } : {},
     {
       TURNSTILE_SECRET_KEY = cloudflare_turnstile_widget.registration.secret
     }

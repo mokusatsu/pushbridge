@@ -1,0 +1,35 @@
+name: Cloudflare dev synthetic monitor
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pushbridge-cloudflare-dev-synthetic-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PUSHBRIDGE_REMOTE_ORIGIN: https://pushbridge-dev.mokusatsu.workers.dev
+      PUSHBRIDGE_MONITOR_MAX_LATENCY_MS: "5000"
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Verify required Cloudflare Access secrets
+        shell: bash
+        run: |
+          test -n "$CF_ACCESS_CLIENT_ID"
+          test -n "$CF_ACCESS_CLIENT_SECRET"
+      - name: Check public API and required bindings
+        run: node scripts/cloudflare-synthetic-monitor.mjs

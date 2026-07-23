@@ -22,6 +22,18 @@ interface FileInit {
   upload_headers: Record<string, string>;
 }
 
+function isPresignedR2Target(target: URL): boolean {
+  return target.protocol === 'https:'
+    && /^[a-f0-9]{32}\.r2\.cloudflarestorage\.com$/u.test(target.hostname)
+    && target.searchParams.get('X-Amz-Algorithm') === 'AWS4-HMAC-SHA256'
+    && Boolean(target.searchParams.get('X-Amz-Signature'));
+}
+
+async function sha256Hex(value: ArrayBuffer): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', value));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const state = await getState();
   if (!state.accessToken) throw new Error('拡張機能を端末リンクしてください。');
@@ -81,19 +93,24 @@ export async function uploadEncryptedFile(
     const encrypted = await encryptFile(accountKey.bytes, accountKey.version, initialized.file.id, await file.arrayBuffer());
     progress('uploading');
     const uploadUrl = new URL(initialized.upload_url, API_ORIGIN);
-    if (uploadUrl.host !== new URL(API_ORIGIN).host || !['http:', 'https:'].includes(uploadUrl.protocol)) {
-      throw new Error('アップロード先originが一致しません。');
+    const sameOrigin = uploadUrl.origin === new URL(API_ORIGIN).origin;
+    const directR2 = isPresignedR2Target(uploadUrl);
+    if (!sameOrigin && !directR2) {
+      throw new Error('信頼されていないアップロード先を拒否しました。');
     }
+    const encryptedHash = await sha256Hex(encrypted);
+    const uploadHeaders = { ...initialized.upload_headers };
     const upload = await fetch(uploadUrl, {
       method: initialized.upload_method,
-      headers: initialized.upload_headers,
+      headers: uploadHeaders,
       body: encrypted,
-      credentials: 'include',
+      credentials: sameOrigin ? 'include' : 'omit',
     });
     if (!upload.ok) throw new Error(`暗号化ファイルのアップロードに失敗しました (${upload.status})`);
     progress('completing');
     const completed = await request<FileRecord>(`/files/${encodeURIComponent(initialized.file.id)}/complete`, {
       method: 'POST',
+      body: JSON.stringify({ sha256: encryptedHash }),
     });
     return {
       id: completed.id,
