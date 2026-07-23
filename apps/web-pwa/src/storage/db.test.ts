@@ -37,6 +37,23 @@ describe('AppDatabase', () => {
     expect(stored?.key_version).toBe(2);
     expect(Array.from(stored?.key_bytes ?? [])).toEqual(Array.from(key));
   });
+
+  it('clears account keys together with all other local account data', async () => {
+    const db = createDb();
+    await db.putAccountKey({
+      key_version: 1,
+      key_bytes: new Uint8Array(32).fill(3),
+      recovery_key_bytes: new Uint8Array(32).fill(4),
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    await db.putPush(push);
+    await db.setCursor('sensitive-cursor');
+    await db.clearAll();
+    expect(await db.getAccountKey()).toBeUndefined();
+    expect(await db.listPushes()).toEqual([]);
+    expect(await db.getCursor()).toBe('');
+  });
+
   it('applies change events atomically and advances the cursor', async () => {
     const db = createDb();
     const changes: ChangeEvent[] = [{

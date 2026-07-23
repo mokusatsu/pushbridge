@@ -269,7 +269,7 @@ export function SettingsPage() {
         method: 'DELETE',
         body: JSON.stringify({ confirmation: 'DELETE' }),
       });
-      await runtime.clearLocalData();
+      await runtime.destroyLocalData();
       await clearDeviceIdentity();
       clearClientSettings();
       window.location.reload();

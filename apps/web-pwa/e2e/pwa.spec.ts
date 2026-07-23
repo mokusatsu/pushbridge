@@ -174,6 +174,109 @@ test('two devices preserve a received File in IndexedDB and expose missed delive
   }
 });
 
+test('account deletion revokes every device and clears local IndexedDB identity @desktop', async ({ browser, request }) => {
+  const { first, second, namespace } = await createCredentials(request);
+  const context = await browser.newContext({ baseURL: origin, viewport: { width: 1280, height: 900 } });
+  try {
+    const page = await context.newPage();
+    await page.goto(origin);
+    await page.evaluate(({ settingsKey: key, tokenKey: authKey, token, deviceId, namespace: storage }) => {
+      localStorage.setItem(key, JSON.stringify({
+        apiBaseUrl: '/api/v1', realtimePath: '/realtime', authMode: 'bearer', rememberBearerToken: true,
+        currentDeviceId: deviceId, storageNamespace: storage, pollIntervalSeconds: 5,
+        autoCacheReceivedFiles: true, localFileCacheMaxBytes: 64 * 1024 * 1024,
+      }));
+      localStorage.setItem(authKey, token);
+    }, { settingsKey, tokenKey, token: first.access_token, deviceId: first.device.id, namespace });
+    await page.goto(`${origin}/#/timeline`);
+    await expect(page.getByText('API接続中')).toBeVisible();
+    await sendNote(page, `Delete account ${Date.now()}`);
+    await page.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open('pushbridge-device-identity-v1', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('identity', { keyPath: 'id' });
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('identity', 'readwrite');
+        transaction.objectStore('identity').put({ id: 'current', privateKey: 'fixture-secret', publicKey: 'fixture-public' });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+    });
+
+    await page.goto(`${origin}/#/settings`);
+    page.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('prompt');
+      await dialog.accept('DELETE');
+    });
+    await page.getByRole('button', { name: 'アカウントを完全に削除' }).click();
+    await expect(page.getByText('RelayMockの端末Tokenが未設定です。')).toBeVisible();
+    const localState = await page.evaluate(async ({ settings, token, namespace: storage }) => {
+      const databases = await indexedDB.databases();
+      const safe = storage.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+      const databaseName = `pushbridge-${safe || 'default'}-v2`;
+      const runtimeDatabaseExists = databases.some((entry) => entry.name === databaseName);
+      if (!runtimeDatabaseExists) {
+        return {
+          settings: localStorage.getItem(settings),
+          token: localStorage.getItem(token),
+          identityDatabaseExists: databases.some((entry) => entry.name === 'pushbridge-device-identity-v1'),
+          runtimeDatabaseExists,
+          cursor: '',
+          sensitiveRecords: 0,
+        };
+      }
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open(databaseName);
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      const counts: Record<string, number> = {};
+      for (const store of Array.from(database.objectStoreNames)) {
+        counts[store] = await new Promise<number>((resolve, reject) => {
+          const count = database.transaction(store).objectStore(store).count();
+          count.onsuccess = () => resolve(count.result);
+          count.onerror = () => reject(count.error);
+        });
+      }
+      const cursor = await new Promise<string>((resolve, reject) => {
+        const result = database.transaction('meta').objectStore('meta').get('cursor');
+        result.onsuccess = () => resolve(result.result?.value ?? '');
+        result.onerror = () => reject(result.error);
+      });
+      database.close();
+      return {
+        settings: localStorage.getItem(settings),
+        token: localStorage.getItem(token),
+        identityDatabaseExists: databases.some((entry) => entry.name === 'pushbridge-device-identity-v1'),
+        runtimeDatabaseExists,
+        cursor,
+        sensitiveRecords: ['pushes', 'devices', 'outbox', 'cachedFiles', 'e2eeKeys']
+          .reduce((total, store) => total + (counts[store] ?? 0), 0),
+      };
+    }, { settings: settingsKey, token: tokenKey, namespace });
+    expect(localState).toEqual({
+      settings: null,
+      token: null,
+      identityDatabaseExists: false,
+      runtimeDatabaseExists: false,
+      cursor: '',
+      sensitiveRecords: 0,
+    });
+    expect((await request.get('/api/v1/devices', {
+      headers: { Authorization: `Bearer ${first.access_token}` },
+    })).status()).toBe(401);
+    expect((await request.get('/api/v1/devices', {
+      headers: { Authorization: `Bearer ${second.access_token}` },
+    })).status()).toBe(401);
+  } finally {
+    await context.close();
+  }
+});
+
 test('service worker exposes and applies a real byte-level update @desktop', async ({ page }) => {
   const serviceWorkerPath = fileURLToPath(new URL('../../../infra/cloudflare/app/dist/sw.js', import.meta.url));
   const original = await readFile(serviceWorkerPath, 'utf8');

@@ -821,8 +821,15 @@ export class AppRuntime {
 
   async clearLocalData(): Promise<void> {
     await this.db.clearAll();
+    this.accountKey = undefined;
     await this.reloadCached();
     this.notify('success', 'ローカルキャッシュと送信箱を消去しました。');
+  }
+
+  async destroyLocalData(): Promise<void> {
+    this.stop();
+    this.accountKey = undefined;
+    await this.db.destroy();
   }
 
   async copyRecoveryKey(): Promise<void> {

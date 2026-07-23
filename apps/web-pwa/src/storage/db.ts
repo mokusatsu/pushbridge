@@ -323,12 +323,13 @@ export class AppDatabase {
 
   async clearAll(): Promise<void> {
     const db = await this.dbPromise;
-    const tx = db.transaction(['meta', 'pushes', 'devices', 'outbox', 'cachedFiles'], 'readwrite');
+    const tx = db.transaction(['meta', 'pushes', 'devices', 'outbox', 'cachedFiles', 'e2eeKeys'], 'readwrite');
     await Promise.all([
       tx.objectStore('pushes').clear(),
       tx.objectStore('devices').clear(),
       tx.objectStore('outbox').clear(),
       tx.objectStore('cachedFiles').clear(),
+      tx.objectStore('e2eeKeys').clear(),
       tx.objectStore('meta').put({ key: 'cursor', value: '' }),
     ]);
     await tx.done;
