@@ -38,7 +38,7 @@
 | R2 direct adapter dormant deploy | SigV4固定vector、署名済み`If-None-Match: *`、R2 hostname制限、認証済みcomplete hash／実bytes照合、30秒GET交換、拡張機能server-ticket fallbackをWorker 40件／PWA 43件で確認。専用資格情報なしのため`direct_upload=false`のままWorker/PWAを0 add / 1 change / 0 destroyでdevへ適用し、remote smokeとPlaywrightが合格。適用後Planは差分なし |
 | D1 recovery drill | migration 0001〜0012を適用した隔離ローカルD1に合成user/device/暗号文Pushを作成し、Wrangler exportから別D1へrestore。schema version 12、各件数、暗号文一致、account deletion tableを検証し、一時成果物の削除まで合格 |
 | Linux GitHub Actions | commit `09526d4`の[CI run #21](https://github.com/mokusatsu/pushbridge/actions/runs/30030269920)が2026-07-24にsuccess。Node 22で契約、RelayMock、PWA/Worker/拡張、Terraform fmt/validate、Wrangler local smoke、Passkey cookie-session E2Eまで合格 |
-| Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。GitHub上の実行はbranch push後に未確認 |
+| Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。branchはpush済みだがworkflow fileがdefault branchに未到達のためGitHub未登録で、mergeとrepository secrets設定後に実行確認が必要 |
 
 2026-07-24に固定IPv4ポリシーを認証ユーザー向け`allow`から非IDの`non_identity` Service Authへ修正した。Access自体を迂回する`bypass`は使用せず、固定IPとService Tokenのどちらでも非対話アクセスできる。固定IPv4経路ではAccess tokenヘッダーなしの主要3 endpoint、公開PWA Playwright、実Edge closed-PWA Web Pushに合格した。テストFile/R2/Push/端末/accountは各smoke終了時に回収する。
 
@@ -52,7 +52,7 @@
 | 実ブラウザーFile E2E | local Playwrightで画面・IndexedDB・offline・missed・Service Worker更新と時系列HTMLを自動化済み。dev実Web Pushを受けたPWA終了中の自動保存とサーバー削除後offline Blob保持も実Edgeで合格 |
 | Passkey／Turnstile／レート制限 | 実装とlocal統合testは合格。Custom Domain／RP ID未決定のためremote Passkeyは意図的に無効 |
 | remote実ブラウザーService Worker | 2026-07-23に暗号化Note/File、IndexedDB、server削除後Blob保持、Service Worker activation、offline reloadまで合格 |
-| 監視通知の配送先 | 毎時synthetic workflowとoptional Cloudflare incident／Service Token期限notificationをIaC化。通知メールとGitHub Actions secretsはrepositoryへ設定後に実行確認が必要 |
+| 監視通知の配送先 | 毎時synthetic workflowとoptional Cloudflare incident／Service Token期限notificationをIaC化。workflowはdefault branchへのmerge、通知メールとGitHub Actions secretsはrepositoryへの設定後に実行確認が必要 |
 
 ## 判定
 

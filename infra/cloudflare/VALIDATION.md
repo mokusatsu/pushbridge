@@ -44,7 +44,7 @@ Worker統合testではPhase 1の失効session、署名cursor改変、`include_de
 ## 未実装・未確認
 
 - 専用最小権限R2 credentialによるpresigned direct upload実環境E2E。adapterはdormant deploy済みで、現在は`direct_upload=false`のserver-ticket
-- Cloudflare notificationの配送メールとscheduled monitor用GitHub Actions secrets
+- Cloudflare notificationの配送メール、scheduled monitor／manual remote smoke workflowのdefault branch mergeとGitHub Actions secrets
 - R2実削除失敗をCloudflare側で意図的に発生させた運用観測。Cron invocation自体はCloudflare Scheduled datasetで連日successを確認済み
 - Passkey／正式Sessionはlocal Chromiumで合格。Custom Domain／RP ID未決定のためremote capabilityは意図的にfalse
 - Turnstile検証経路は実装・統合test済みだが、Access保護下のdevでは自動smokeを維持するため必須化していない
