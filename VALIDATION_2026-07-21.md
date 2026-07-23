@@ -37,7 +37,7 @@
 | bounded remote load | 固定IPv4からService Tokenなし、concurrency 10で同一Idempotency-Keyを50並行再送し一意Push 1件。health 100回はp95 59ms、認証cursor 100回はp95 238ms、全251 requestでerror 0。合成account完全削除とtoken 401まで確認 |
 | R2 direct adapter dormant deploy | SigV4固定vector、署名済み`If-None-Match: *`、R2 hostname制限、認証済みcomplete hash／実bytes照合、30秒GET交換、拡張機能server-ticket fallbackをWorker 40件／PWA 43件で確認。専用資格情報なしのため`direct_upload=false`のままWorker/PWAを0 add / 1 change / 0 destroyでdevへ適用し、remote smokeとPlaywrightが合格。適用後Planは差分なし |
 | D1 recovery drill | migration 0001〜0012を適用した隔離ローカルD1に合成user/device/暗号文Pushを作成し、Wrangler exportから別D1へrestore。schema version 12、各件数、暗号文一致、account deletion tableを検証し、一時成果物の削除まで合格 |
-| Linux GitHub Actions | commit `09526d4`の[CI run #21](https://github.com/mokusatsu/pushbridge/actions/runs/30030269920)が2026-07-24にsuccess。Node 22で契約、RelayMock、PWA/Worker/拡張、Terraform fmt/validate、Wrangler local smoke、Passkey cookie-session E2Eまで合格 |
+| Linux GitHub Actions | 実装commit `09526d4`の[CI run #21](https://github.com/mokusatsu/pushbridge/actions/runs/30030269920)から文書同期commit `b443120`のrun #23まで連続success。Node 22で契約、RelayMock、PWA/Worker/拡張、Terraform fmt/validate、Wrangler local smoke、Passkey cookie-session E2Eまで合格 |
 | Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。branchはpush済みだがworkflow fileがdefault branchに未到達のためGitHub未登録で、mergeとrepository secrets設定後に実行確認が必要 |
 
 2026-07-24に固定IPv4ポリシーを認証ユーザー向け`allow`から非IDの`non_identity` Service Authへ修正した。Access自体を迂回する`bypass`は使用せず、固定IPとService Tokenのどちらでも非対話アクセスできる。固定IPv4経路ではAccess tokenヘッダーなしの主要3 endpoint、公開PWA Playwright、実Edge closed-PWA Web Pushに合格した。テストFile/R2/Push/端末/accountは各smoke終了時に回収する。

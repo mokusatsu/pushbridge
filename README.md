@@ -88,9 +88,9 @@ API_ORIGIN=http://127.0.0.1:8000 npm run smoke:api
 | upload/download ticket | PoCはWorker中継server-ticket、完成形は短寿命署名URL |
 | REST polling | REST cursor sync＋DO/WebSocket tickle |
 
-Durable ObjectsとWebSocketは変更通知に限定し、欠落回復と最終整合性はRESTカーソル同期が担います。R2オブジェクトはWorkerメモリを経由させません。
+Durable ObjectsとWebSocketは変更通知に限定し、欠落回復と最終整合性はRESTカーソル同期が担います。現在のserver-ticket fallbackではR2 bytesをWorkerが中継します。専用資格情報を設定したPWAだけが短寿命presigned URLでWorker body pathを迂回し、Chromium拡張は最小host permission維持のためserver-ticketを継続します。
 
-保持期間、容量逼迫時の自動削除、端末内永続受信箱の確定仕様は`docs/11_RETENTION_AND_LOCAL_PERSISTENCE.md`を参照してください。GUIから逆算した分類、状態表示、ストレージAPIは`docs/12_GUI_DERIVED_API.md`を参照してください。過去文書に残る24時間TTL案より、これらを優先します。
+保持期間、容量逼迫時の自動削除、端末内永続受信箱の確定仕様は`docs/11_RETENTION_AND_LOCAL_PERSISTENCE.md`を参照してください。GUIから逆算した分類、状態表示、ストレージAPIは`docs/12_GUI_DERIVED_API.md`を参照してください。公開判定と残る外部gateは`docs/14_PRODUCTION_READINESS_REVIEW.md`を参照してください。過去文書に残る24時間TTL案より、これらを優先します。
 
 ## 安全境界
 

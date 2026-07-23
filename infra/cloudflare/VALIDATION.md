@@ -16,7 +16,7 @@
 | Remote Chromium | 暗号化Note/File、IndexedDB保存、server削除後Blob保持、Service Worker activation、offline reloadに合格 |
 | Remote R2 fixture | 暗号化fixtureのPUT／GET byte hash一致を確認し、prefix listでfixture残存0件を確認 |
 | Closed-PWA Web Push | インストール済みEdgeを閉じた状態で実Push service配送、Service Worker復号、IndexedDB commit後cached ACK、サーバー削除後offline Blob保持を確認 |
-| Linux CI | commit `09526d4`の[GitHub Actions run #21](https://github.com/mokusatsu/pushbridge/actions/runs/30030269920)が成功。Node 22で契約、RelayMock、PWA/Worker/拡張、Terraform、Wrangler smoke、Passkey E2Eを実行 |
+| Linux CI | 実装commit `09526d4`の[run #21](https://github.com/mokusatsu/pushbridge/actions/runs/30030269920)から文書同期commit `b443120`のrun #23まで連続成功。Node 22で契約、RelayMock、PWA/Worker/拡張、Terraform、Wrangler smoke、Passkey E2Eを実行 |
 | Capacity baseline | concurrency 10、同一Idempotency-Key 50並行再送、health 100回、cursor 100回、error 0、一意Push 1件。合成accountとR2 fixtureを終了時に回収 |
 
 Phase 8 pre-apply planはWorker更新のほか、実環境Accessにのみ存在する追加IPv6 `/128`の削除を検出したため適用を停止した。ユーザーが動的IPv6変更に伴いDashboardへ手動追加した値だと確認したため、未追跡`terraform.tfvars`へ同じ`/128`を反映した。refresh付きPlanは`cloudflare_workers_script.app`だけが0 add / 1 change / 0 destroyでAccess差分なし、migration 0011とWorkerを適用した。最初の再PlanでPhase 7時の一時CLI指定が失われ`REQUIRE_E2EE=true`からfalseへ退行したことを公開Playwrightが検出したため、tracked既定値をtrueへ変更し、Workerだけの0 add / 1 change / 0 destroyで復旧した。最終Planは差分なし。
