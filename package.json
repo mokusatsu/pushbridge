@@ -25,6 +25,7 @@
     "cloudflare:local:dev": "npx --yes wrangler@4 dev --local --config infra/cloudflare/wrangler.local.jsonc --persist-to .runtime/wrangler --ip 127.0.0.1 --port 8787",
     "cloudflare:local:smoke": "node scripts/cloudflare-local-smoke.mjs",
     "cloudflare:local:passkey-e2e": "node scripts/cloudflare-passkey-e2e.mjs",
+    "cloudflare:local:recovery-drill": "node scripts/cloudflare-d1-recovery-drill.mjs",
     "cloudflare:remote:smoke": "node scripts/cloudflare-remote-smoke.mjs",
     "cloudflare:remote:e2e": "npm run --prefix apps/web-pwa test:e2e:remote",
     "pwa:evidence": "npm run --prefix apps/web-pwa evidence:browser"

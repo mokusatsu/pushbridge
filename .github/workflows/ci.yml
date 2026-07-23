@@ -46,6 +46,8 @@ jobs:
         run: make smoke
       - name: Local Cloudflare Worker and PWA smoke test
         run: npm run cloudflare:local:smoke
+      - name: Local D1 export and restore recovery drill
+        run: npm run cloudflare:local:recovery-drill
       - name: Browser PWA end-to-end test
         run: npm run --prefix apps/web-pwa test:e2e
       - name: Browser Passkey and cookie-session end-to-end test

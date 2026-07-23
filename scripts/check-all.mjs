@@ -68,6 +68,7 @@ run(process.execPath, ["--check", "infra/cloudflare/scripts/render-web-push-tfva
 run(process.execPath, ["--check", "infra/cloudflare/scripts/diagnose-terraform-state.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-local-smoke.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-passkey-e2e.mjs"]);
+run(process.execPath, ["--check", "scripts/cloudflare-d1-recovery-drill.mjs"]);
 run(process.execPath, ["--check", "scripts/chromium-extension-e2e.mjs"]);
 run(process.execPath, ["--check", "scripts/chromium-extension-store-evidence.mjs"]);
 run(process.execPath, ["--check", "scripts/cloudflare-extension-e2e.mjs"]);

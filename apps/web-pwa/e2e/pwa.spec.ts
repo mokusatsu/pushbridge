@@ -320,7 +320,13 @@ test('mobile keyboard and ARIA flow remains usable when notifications are denied
     permission: { name: 'notifications' }, setting: 'denied', origin: new URL(page.url()).origin,
     browserContextId: targetInfo.browserContextId,
   });
-  expect(await page.evaluate(() => Notification.permission)).toBe('denied');
+  await expect.poll(async () => {
+    try {
+      return await page.evaluate(() => Notification.permission);
+    } catch {
+      return 'navigation-in-progress';
+    }
+  }).toBe('denied');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
   await expect(page.getByRole('button', { name: '今すぐ同期' })).toHaveAttribute('type', 'button');

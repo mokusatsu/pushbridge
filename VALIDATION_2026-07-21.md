@@ -1,7 +1,7 @@
 # Pushbridge PoC validation record
 
 初回実施日: 2026-07-21<br>
-再検証日: 2026-07-23
+再検証日: 2026-07-24
 
 ## 合格
 
@@ -32,6 +32,7 @@
 | Phase 9 Chromium拡張 local/dev | Manifest V3、最小権限、device-link、P-256端末鍵、E2EE Note/Link/File、private R2、current tab/context menu/端末選択/shortcut、one-time WebSocket、cursor同期、通知を実装。実Chromium＋専用Wrangler/D1と公開devの両方で暗号文非漏洩・別端末復号を確認。実Web Pushは通常Chrome未導入かつ一時profileのPushManager permission deniedにより未確認 |
 | Phase 9 Store draft | privacy disclosure、日文listing、permission rationale、公開前checklist、実Chromium 1280x800 screenshot 3枚、再現可能zipを生成。公開privacy URL／support contact／Custom Domain未確定のため提出は未実施 |
 | Account deletion local | migration 0012、即時account/session/device/token/subscription失効、DO WebSocket切断、R2 100件cursor削除、D1物理削除、指数backoff、20回後manual intervention、PWA秘密鍵／IndexedDB消去、RelayMockを実装。Worker 37件、RelayMock 26件、PWA 41件、実Chromium account deletion、fresh D1 local E2Eに合格。devは0012未適用、Terraform PlanはWorkerのみ0 add / 1 change / 0 destroyで承認待ち |
+| D1 recovery drill | migration 0001〜0012を適用した隔離ローカルD1に合成user/device/暗号文Pushを作成し、Wrangler exportから別D1へrestore。schema version 12、各件数、暗号文一致、account deletion tableを検証し、一時成果物の削除まで合格 |
 | Manual remote smoke workflow | `workflow_dispatch`専用workflowを追加。Access Service Tokenだけを使用し、API/D1/private R2/E2EE/realtime、公開PWA、Chromium拡張を検証。trace／video／screenshot／認証cookieのartifact保存なし。GitHub上の実行はbranch push後に未確認 |
 
 2026-07-22の現実行環境はallowlist外であり、通常アクセスは302で保護される。Accessを無効化せず、対象Service TokenだけをTerraform管理の`non_identity`ポリシーで許可し、公開WorkerのPhase 2縦切りを完了した。テストFile/R2/Push/端末Bはsmoke終了時に回収し、残ったfixtureユーザーも直近候補1件に限定してD1からcascade回収、残存0件を確認した。
