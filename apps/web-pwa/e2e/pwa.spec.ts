@@ -292,10 +292,18 @@ test('service worker exposes and applies a real byte-level update @desktop', asy
       }
     }).toBe(true);
     await writeFile(serviceWorkerPath, `${original}\n// playwright-update-${Date.now()}\n`, 'utf8');
-    await page.evaluate(async () => {
-      const registration = await navigator.serviceWorker.getRegistration('/');
-      await registration?.update();
-    });
+    await expect.poll(async () => {
+      try {
+        return await page.evaluate(async () => {
+          const registration = await navigator.serviceWorker.getRegistration('/');
+          await registration?.update();
+          return true;
+        });
+      } catch (error) {
+        if (/Execution context was destroyed|because of a navigation/u.test(String(error))) return false;
+        throw error;
+      }
+    }).toBe(true);
     await expect(page.getByText('新しいWeb/PWAバージョンを利用できます。')).toBeVisible();
     const update = page.getByRole('button', { name: '更新', exact: true });
     await expect(update).toBeEnabled();
